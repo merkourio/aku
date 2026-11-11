@@ -9,6 +9,7 @@ the session clock.
 from __future__ import annotations
 
 import fcntl
+import logging
 import os
 import select
 import signal
@@ -22,9 +23,10 @@ import numpy as np
 
 from ..config import SAMPLE_RATE, die_with_parent
 from . import pipewire
-from .wav import WavWriter
+from .wav import WavWriter, repair
 
 SR = SAMPLE_RATE
+log = logging.getLogger(__name__)
 GAP = int(0.12 * SR)  # a block this late (about two blocks) means the stream stalled: pad right away
 DRIFT = int(0.02 * SR)  # offset beyond this is corrected
 WINDOW = 10.0  # seconds over which the offset is measured
@@ -45,6 +47,7 @@ class ClockedTrack:
         self.padded = 0  # samples of silence inserted
         self.dropped = 0  # samples removed (audio clock ran fast)
         self.level = 0.0  # recent peak, 0..1
+        self.error: str | None = None  # set when writing the file failed
         self._win_start = t0
         self._win_len = RESYNC_WINDOW
         self._win_min: int | None = None
@@ -53,14 +56,25 @@ class ClockedTrack:
         self._lock = threading.Lock()
         self._closed = False
 
+    def _fail(self, e: OSError) -> None:
+        """Writing failed (disk full, folder gone). Stop this track; the session manager ends the recording."""
+        if self.error is None:
+            self.error = f"Could not write the recording: {e.strerror or e}"
+            log.error("%s: %s", self.wav.path.name, self.error)
+        self._closed = True
+
     def _emit(self, pcm: np.ndarray) -> None:
-        if len(pcm) == 0:
+        if len(pcm) == 0 or self.error:
             return
         start = self.written
         self.wav.write(pcm)
         self.written += len(pcm)
-        for fn in self.listeners:
-            fn(pcm, start)
+        for fn in list(self.listeners):
+            try:
+                fn(pcm, start)
+            except Exception:  # noqa: BLE001 - e.g. the transcriber's chunker; the audio must keep recording
+                log.exception("%s: a listener failed and was dropped; audio is still recorded", self.wav.path.name)
+                self.listeners.remove(fn)
 
     def _silence(self, n: int) -> None:
         if n > 0:
@@ -77,33 +91,38 @@ class ClockedTrack:
         with self._lock:
             if self._closed or len(pcm) == 0:
                 return
-            now = self.clock() if now is None else now
-            deficit = int((now - self.t0) * SR) - (self.written + len(pcm))
-            if deficit > GAP or (self._resync and deficit > 0):
-                self._silence(deficit)
-                deficit = 0
-                self._resync = True
-            if self._resync:
-                self._new_window(now, RESYNC_WINDOW)
-                self._resync = False
-            self._win_min = deficit if self._win_min is None else min(self._win_min, deficit)
-            if now - self._win_start >= self._win_len:
-                # Arrival jitter only ever adds delay, so the least-delayed block in a
-                # window shows the true offset between audio clock and session clock.
-                off = self._win_min
-                if off > DRIFT:
-                    self._silence(off)
-                elif off < -DRIFT:
-                    cut = min(-off, len(pcm))
-                    pcm = pcm[cut:]
-                    self.dropped += cut
-                self._new_window(now, WINDOW)
-            if len(pcm):
-                self.level = float(np.abs(pcm).max()) / 32768.0
-            self._emit(pcm)
-            if now - self._last_flush > 1.0:
-                self.wav.flush()
-                self._last_flush = now
+            try:
+                self._feed(pcm, self.clock() if now is None else now)
+            except OSError as e:
+                self._fail(e)
+
+    def _feed(self, pcm: np.ndarray, now: float) -> None:
+        deficit = int((now - self.t0) * SR) - (self.written + len(pcm))
+        if deficit > GAP or (self._resync and deficit > 0):
+            self._silence(deficit)
+            deficit = 0
+            self._resync = True
+        if self._resync:
+            self._new_window(now, RESYNC_WINDOW)
+            self._resync = False
+        self._win_min = deficit if self._win_min is None else min(self._win_min, deficit)
+        if now - self._win_start >= self._win_len:
+            # Arrival jitter only ever adds delay, so the least-delayed block in a
+            # window shows the true offset between audio clock and session clock.
+            off = self._win_min
+            if off > DRIFT:
+                self._silence(off)
+            elif off < -DRIFT:
+                cut = min(-off, len(pcm))
+                pcm = pcm[cut:]
+                self.dropped += cut
+            self._new_window(now, WINDOW)
+        if len(pcm):
+            self.level = float(np.abs(pcm).max()) / 32768.0
+        self._emit(pcm)
+        if now - self._last_flush > 1.0:
+            self.wav.flush()
+            self._last_flush = now
 
     def tick(self, now: float | None = None) -> None:
         """Called while no data arrives: keep the timeline moving with silence."""
@@ -113,20 +132,33 @@ class ClockedTrack:
             now = self.clock() if now is None else now
             deficit = int((now - self.t0) * SR) - self.written
             if deficit > int(STALL_AFTER * SR):
-                self._silence(deficit - STALL_KEEP)
+                try:
+                    self._silence(deficit - STALL_KEEP)
+                    self.wav.flush()
+                except OSError as e:
+                    self._fail(e)
+                    return
                 self.level = 0.0
                 self._resync = True
-                self.wav.flush()
 
     def finish(self, now: float | None = None) -> None:
         """Pad to the stop time and close the file."""
         with self._lock:
-            if self._closed:
-                return
-            now = self.clock() if now is None else now
-            self._silence(int((now - self.t0) * SR) - self.written)
+            try:
+                if not self._closed:
+                    now = self.clock() if now is None else now
+                    self._silence(int((now - self.t0) * SR) - self.written)
+            except OSError as e:
+                self._fail(e)
             self._closed = True
-            self.wav.close()
+            try:
+                self.wav.close()
+            except OSError as e:
+                log.error("%s: could not close cleanly: %s", self.wav.path.name, e)
+                try:  # the header only needs rewriting in place, which works on a full disk too
+                    repair(self.wav.path, SR)
+                except OSError:
+                    log.error("%s: header not repaired; Recover will do it", self.wav.path.name)
 
 
 class PwStream(threading.Thread):
@@ -164,6 +196,7 @@ class PwStream(threading.Thread):
                 )
             except OSError as e:
                 self.error = f"cannot start pw-record: {e}"
+                log.error("%s: %s", self.node_name, self.error)
                 return
             fd = self._proc.stdout.fileno()
             try:
@@ -203,6 +236,7 @@ class PwStream(threading.Thread):
             except Exception:
                 pass
             self.error = err.decode(errors="replace").strip()[-300:] or "pw-record exited"
+            log.warning("%s: pw-record stopped (%s); retrying", self.node_name, self.error)
             self._kill()
             # PipeWire restarting or device vanished: retry, the gap is padded by tick().
             for _ in range(10):
@@ -235,6 +269,7 @@ class AppLinker(threading.Thread):
         self._stop_flag = threading.Event()
         self.linked = 0
         self.polls = 0
+        self._last_error: str | None = None
 
     def run(self) -> None:
         while not self._stop_flag.is_set():
@@ -243,8 +278,12 @@ class AppLinker(threading.Thread):
                 for out_port, in_port in pipewire.wanted_links(g, self.capture_node, self.app_keys):
                     if pipewire.link(out_port, in_port):
                         self.linked += 1
-            except Exception:
-                pass
+                        log.info("linked an app stream into %s", self.capture_node)
+                self._last_error = None
+            except Exception as e:  # noqa: BLE001 - PipeWire restarting; try again next round
+                if str(e) != self._last_error:  # once per distinct problem, not once a second
+                    log.warning("could not update app links for %s: %s", self.capture_node, e)
+                    self._last_error = str(e)
             self.polls += 1
             self._stop_flag.wait(0.2 if self.polls < 10 else self.interval)
 
@@ -316,10 +355,15 @@ class Capture:
             s.join(timeout=5)
         return self.stopped_at - self.t0
 
+    @property
+    def failed(self) -> str | None:
+        """Why the recording cannot continue (a track could not be written), if so."""
+        return self.mic.error or self.system.error
+
     def errors(self) -> dict[str, str]:
         out = {}
-        if self.mic_stream.error:
-            out["mic"] = self.mic_stream.error
-        if self.system_stream.error:
-            out["system"] = self.system_stream.error
+        if self.mic.error or self.mic_stream.error:
+            out["mic"] = self.mic.error or self.mic_stream.error
+        if self.system.error or self.system_stream.error:
+            out["system"] = self.system.error or self.system_stream.error
         return out

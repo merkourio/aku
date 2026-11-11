@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import logging
 from typing import Callable
 
 from dbus_fast import Message, MessageType, Variant
@@ -22,6 +23,9 @@ IFACE = "org.freedesktop.portal.GlobalShortcuts"
 REQUEST = "org.freedesktop.portal.Request"
 APP_ID = "aku"  # must match the installed launcher entry (aku.desktop, written by scripts/install.sh)
 SHORTCUT = "toggle"
+
+
+log = logging.getLogger(__name__)
 
 
 class PortalError(RuntimeError):
@@ -78,14 +82,17 @@ class GlobalShortcut:
                 self._session, wanted, "", {"handle_token": Variant("s", token)}
             ], timeout=600)  # the user may take a while in the dialog
             self.status = {"state": "bound", "trigger": self._describe(bound), "error": None}
+            log.info("global shortcut bound: %s", self.status["trigger"])
         except asyncio.CancelledError:
             raise
         except PortalError as e:
             unavailable = "unavailable" in str(e)
             self.status = {"state": "unavailable" if unavailable else "error", "trigger": None, "error": str(e)}
+            log.warning("global shortcut not set up: %s", e)
             await self._close()
         except Exception as e:  # noqa: BLE001 - never take the service down over a hotkey
             self.status = {"state": "error", "trigger": None, "error": f"{type(e).__name__}: {e}"}
+            log.exception("global shortcut failed")
             await self._close()
 
     @staticmethod

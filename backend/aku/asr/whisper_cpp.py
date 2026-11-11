@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import socket
 import subprocess
 import threading
@@ -17,6 +18,9 @@ from ..config import SAMPLE_RATE as SR
 from .base import Word, is_non_speech, tidy, tokens_to_words
 
 MIN_SAMPLES = int(1.1 * SR)  # whisper.cpp rejects very short input: pad with silence
+
+
+log = logging.getLogger(__name__)
 
 
 class WhisperError(RuntimeError):
@@ -77,9 +81,11 @@ class WhisperCpp:
             deadline = time.monotonic() + 180
             while time.monotonic() < deadline:
                 if self._proc.poll() is not None:
+                    log.error("whisper-server exited while starting; see %s", self._log)
                     raise WhisperError(f"whisper-server exited: {self._tail()}")
                 try:
                     with socket.create_connection(("127.0.0.1", self.port), timeout=0.5):
+                        log.info("whisper-server ready: %s on port %d (%s)", self.model, self.port, "GPU" if self.use_gpu else "CPU")
                         return
                 except OSError:
                     time.sleep(0.2)

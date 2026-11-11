@@ -10,7 +10,7 @@ Transcription runs on this computer by default (whisper.cpp on the GPU). OpenAI 
 bash scripts/install.sh
 ```
 
-This builds the UI, builds whisper.cpp if needed, installs the `aku` command, and starts Aku in the background at every login. No sudo. Run it again after changing the code. `bash scripts/install.sh --remove` undoes it.
+This builds the UI, builds whisper.cpp if needed, installs the `aku` command, and starts Aku in the background at every login. No sudo. Run it again after changing the code; it refuses while Aku is recording or finishing a transcript, because updating restarts it. `bash scripts/install.sh --remove` undoes it.
 
 Check everything is in place:
 
@@ -63,6 +63,12 @@ On a transcript page:
 ### If Aku was closed mid-recording
 
 The audio is written to disk continuously. On the next start the session shows as **Interrupted**; press **Recover** to finish the transcript and separate the speakers.
+
+### If something goes wrong
+
+- Aku keeps a log of what it does and of every error it shows you. See the latest entries with `journalctl --user -u aku -e`.
+- If the audio can no longer be written (for example the disk fills up), Aku stops the recording by itself, tells you why, and still makes a transcript of what it has. It also refuses to start with less than 500 MB of disk space free.
+- `aku doctor` checks that everything Aku needs is in place.
 
 ## Settings worth knowing
 
@@ -117,6 +123,7 @@ uv run python ../scripts/check_live.py --long  # 10 minutes of back-to-back spee
 uv run python ../scripts/check_diarize.py      # speaker separation at several call lengths
 uv run python ../scripts/check_language.py     # Danish chosen, Automatic, and a mixed Danish/English call
 uv run python ../scripts/check_recovery.py     # kill mid-recording and recover; improve; voiceprints
+uv run python ../scripts/check_failures.py     # the audio can no longer be written mid-recording ("disk full")
 bash ../scripts/check_tray.sh                  # tray icon and `aku toggle`
 uv run python ../scripts/check_shortcut.py     # global-shortcuts portal (add --bind to go through the desktop's dialog)
 cd ../frontend && npm test                     # UI unit tests

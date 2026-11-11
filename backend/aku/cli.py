@@ -10,7 +10,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import __version__, config
+from . import __version__, config, log
 
 
 def base_url() -> str:
@@ -294,6 +294,7 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("doctor", help="check that everything Aku needs is in place").set_defaults(fn=cmd_doctor)
 
     args = ap.parse_args(argv)
+    log.setup()
     try:
         args.fn(args)
     except KeyboardInterrupt:

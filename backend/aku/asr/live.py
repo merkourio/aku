@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 import time
@@ -17,6 +18,9 @@ from ..config import SAMPLE_RATE as SR
 from .base import Backend, Word, looks_hallucinated
 from .chunker import Chunk, Chunker
 from .vad import SileroVAD
+
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -178,7 +182,12 @@ class Transcriber:
                 if self.session_time is not None:
                     seg.lag = max(0.0, self.session_time() - seg.speech_end)
                     self.lags.append(seg.lag)
-                self.on_segment(seg)
+                try:
+                    self.on_segment(seg)
+                except Exception as e:  # noqa: BLE001 - e.g. the disk is full; keep going, the audio has it
+                    log.exception("could not store a transcribed segment")
+                    self.failed += 1
+                    self.on_error(f"Could not save part of the transcript: {e}")
 
     def finish(self) -> None:
         """Close open chunks, transcribe what is queued, stop the worker."""

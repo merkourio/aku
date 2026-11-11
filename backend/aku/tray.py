@@ -9,6 +9,7 @@ signatures from the annotations.
 """
 
 import asyncio
+import logging
 import os
 import signal as os_signal
 import subprocess
@@ -18,6 +19,7 @@ from dbus_fast import PropertyAccess, Variant
 from dbus_fast.aio import MessageBus
 from dbus_fast.service import ServiceInterface, dbus_property, method, signal
 
+log = logging.getLogger(__name__)
 ITEM_PATH = "/StatusNotifierItem"
 MENU_PATH = "/MenuBar"
 ICON_IDLE = "audio-input-microphone-symbolic"
@@ -232,7 +234,7 @@ async def run_tray(manager, url: str) -> None:
         watcher = bus.get_proxy_object("org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher", intro)
         await watcher.get_interface("org.kde.StatusNotifierWatcher").call_register_status_notifier_item(name)
     except Exception as e:  # noqa: BLE001 - no tray host: carry on without an icon
-        print(f"Tray icon not available ({e}). Hotkey and browser UI still work.")
+        log.warning("tray icon not available (%s); hotkey and browser UI still work", e)
         return
 
     def on_event(event: dict) -> None:

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import shutil
 import subprocess
 import threading
 from typing import Callable
 
 Subscriber = Callable[[dict], None]
+log = logging.getLogger(__name__)
 
 
 class EventBus:
@@ -30,11 +32,13 @@ class EventBus:
         with self._lock:
             subs = list(self._subs)
         event = {"type": type, **data}
+        if type == "error":  # whatever the user is shown as an error is also on record
+            log.warning("%s%s", f"[{data['session']}] " if data.get("session") else "", data.get("message"))
         for fn in subs:
             try:
                 fn(event)
             except Exception:  # noqa: BLE001 - one bad subscriber must not stop the rest
-                pass
+                log.exception("an event subscriber failed on a %s event", type)
 
 
 def notify(title: str, body: str = "", enabled: bool = True) -> None:
@@ -46,5 +50,5 @@ def notify(title: str, body: str = "", enabled: bool = True) -> None:
             ["notify-send", "--app-name=Aku", "--icon=audio-input-microphone", title, body],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-    except OSError:
-        pass
+    except OSError as e:
+        log.debug("notification not shown: %s", e)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -10,6 +11,9 @@ from pathlib import Path
 from typing import Callable
 
 from .. import config
+
+
+log = logging.getLogger(__name__)
 
 
 class DiarizationError(RuntimeError):
@@ -41,8 +45,8 @@ def run(
         "--wav", str(wav_path), "--out", str(out_path),
         "--engine", engine, "--speakers", str(speakers) if speakers else "auto",
     ]
-    log = Path(out_path).with_name("diarize.log")
-    with open(log, "w") as errors:
+    errors_file = Path(out_path).with_name("diarize.log")
+    with open(errors_file, "w") as errors:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=errors, text=True, env=env, preexec_fn=config.die_with_parent
         )
@@ -57,6 +61,9 @@ def run(
         elif progress and "progress" in msg:
             progress(float(msg["progress"]), msg.get("step", ""))
     if proc.wait() != 0 or error:
-        raise DiarizationError(error or log.read_text(errors="replace").strip()[-400:] or "diarization failed")
-    log.unlink(missing_ok=True)
+        detail = error or errors_file.read_text(errors="replace").strip()[-400:] or "diarization failed"
+        log.error("speaker separation (%s) failed: %s", engine, detail)
+        raise DiarizationError(detail)
+    errors_file.unlink(missing_ok=True)
+    log.info("speaker separation (%s) done for %s", engine, Path(wav_path).parent.name)
     return json.loads(Path(out_path).read_text())

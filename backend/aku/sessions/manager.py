@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import threading
 import time
@@ -28,6 +29,12 @@ from ..vocab import store as vocab
 from . import markdown, merge
 from .liveview import LiveView
 from .store import Session, all_sessions, new_session
+
+
+log = logging.getLogger(__name__)
+START_MIN_FREE = 500 * 1024 * 1024  # refuse to start a recording with less disk space than this
+STOP_AT_FREE = 150 * 1024 * 1024  # end a running recording cleanly before the disk is full
+DISK_CHECK_TICKS = 20  # look at the free space every 10 s (the ticker runs twice a second)
 
 
 class Busy(RuntimeError):
@@ -261,36 +268,21 @@ class Manager:
                 raise Invalid('backend must be "local" or "cloud"')
             sets = settings["active_vocab_sets"] if vocab_sets is None else list(vocab_sets)
             language = parse_language(language or settings["language"])
+            free = config.free_bytes(config.sessions_dir())
+            if free < START_MIN_FREE:
+                raise Invalid(f"Only {free // (1024 * 1024)} MB of disk space left. Free some space before recording.")
             be = self.make_backend(kind)
             session = new_session()
-            user = settings["user_name"] or "Me"
-            session.update(
-                id=session.id, created=datetime.now().astimezone().isoformat(timespec="seconds"),
-                status="recording", title="", duration=0, sources=sources, backend=kind,
-                backend_name=be.name, vocab_sets=sets, language=language, user_name=user,
-            )
-            config.save_settings({"last_sources": sources, "active_vocab_sets": sets, "backend": kind, "language": language})
-            capture = Capture(session.dir, sources, tag=session.id[-6:])
-            transcriber = Transcriber(
-                be, on_segment=lambda seg: self._on_segment(session.id, seg), prompt=prompt_maker(sets),
-                language=language, session_time=capture.elapsed,
-                on_error=lambda msg: self.bus.emit("error", session=session.id, message=msg),
-            )
-            for name, track in capture.tracks.items():
-                track.listeners.append(transcriber.chunker(name).feed)
-            rules = vocab.compile_rules()
-            view = self._views[session.id] = LiveView(user, rules)
-            active = Active(session, capture, transcriber, be, rules, user, view)
-            if settings["live_diarization"]:
-                active.live = LiveDiarizer(
-                    session.system, flush=capture.system.wav.flush,
-                    on_turns=lambda turns, found: self._on_live_turns(active, turns, found),
-                    on_error=lambda msg: self.bus.emit("error", session=session.id, message=msg),
-                )
-            self.active = active
-            capture.start()
-            for msg in capture.warnings:
-                self.bus.emit("error", session=session.id, message=msg)
+            try:
+                active = self._begin(session, settings, sources, kind, be, sets, language)
+            except Exception:
+                # nothing was recorded: do not leave an empty "interrupted" session behind
+                log.exception("could not start recording; removing session %s", session.id)
+                self._views.pop(session.id, None)
+                self.active = None
+                session.delete()
+                raise
+        log.info("recording %s started (%s, language %s, scope %s)", session.id, be.name, language, sources["scope"])
         if hasattr(be, "start"):
             threading.Thread(target=self._warm_up, args=(be, session.id), daemon=True).start()
         threading.Thread(target=self._ticker, args=(active,), daemon=True).start()
@@ -299,6 +291,38 @@ class Manager:
         self.bus.emit("status", **self.status())
         return self.summary(session)
 
+    def _begin(self, session: Session, settings: dict, sources: dict, kind: str, be: Backend, sets: list[str], language: str) -> Active:
+        """Everything between "session folder exists" and "audio is flowing". Called with the lock held."""
+        user = settings["user_name"] or "Me"
+        session.update(
+            id=session.id, created=datetime.now().astimezone().isoformat(timespec="seconds"),
+            status="recording", title="", duration=0, sources=sources, backend=kind,
+            backend_name=be.name, vocab_sets=sets, language=language, user_name=user,
+        )
+        config.save_settings({"last_sources": sources, "active_vocab_sets": sets, "backend": kind, "language": language})
+        capture = Capture(session.dir, sources, tag=session.id[-6:])
+        transcriber = Transcriber(
+            be, on_segment=lambda seg: self._on_segment(session.id, seg), prompt=prompt_maker(sets),
+            language=language, session_time=capture.elapsed,
+            on_error=lambda msg: self.bus.emit("error", session=session.id, message=msg),
+        )
+        for name, track in capture.tracks.items():
+            track.listeners.append(transcriber.chunker(name).feed)
+        rules = vocab.compile_rules()
+        view = self._views[session.id] = LiveView(user, rules)
+        active = Active(session, capture, transcriber, be, rules, user, view)
+        if settings["live_diarization"]:
+            active.live = LiveDiarizer(
+                session.system, flush=capture.system.wav.flush,
+                on_turns=lambda turns, found: self._on_live_turns(active, turns, found),
+                on_error=lambda msg: self.bus.emit("error", session=session.id, message=msg),
+            )
+        self.active = active
+        capture.start()
+        for msg in capture.warnings:
+            self.bus.emit("error", session=session.id, message=msg)
+        return active
+
     def _warm_up(self, backend, sid: str) -> None:
         try:
             backend.start()
@@ -306,10 +330,29 @@ class Manager:
             self.bus.emit("error", session=sid, message=f"Local transcription could not start: {e}")
 
     def _ticker(self, active: Active) -> None:
+        ticks = 0
         while not active.stop_ticker.wait(0.5):
             # a muted microphone delivers exact zeros; a live one always has some noise
             active.mic_quiet = active.mic_quiet + 0.5 if active.capture.mic.level == 0.0 else 0.0
             self.bus.emit("status", **self.status())
+            ticks += 1
+            problem = active.capture.failed
+            if problem is None and ticks % DISK_CHECK_TICKS == 0 and config.free_bytes(active.session.dir) < STOP_AT_FREE:
+                problem = "The disk is almost full."
+            if problem:
+                self._abort(active, problem)
+                return
+
+    def _abort(self, active: Active, problem: str) -> None:
+        """The recording cannot continue: stop it, keep what there is, and say so."""
+        message = f"Recording stopped early: {problem.rstrip('.')}. What was recorded up to that point is kept."
+        log.error("[%s] %s", active.session.id, message)
+        self._notify("Aku stopped recording", message)
+        self.bus.emit("error", session=active.session.id, message=message)
+        try:
+            self.stop(active.session.id, note=message)
+        except Exception:  # noqa: BLE001 - e.g. the user pressed Stop at the same moment
+            log.exception("[%s] could not stop the failed recording cleanly", active.session.id)
 
     def _on_segment(self, sid: str, seg: Segment) -> None:
         a = self.active
@@ -352,7 +395,8 @@ class Manager:
         self.bus.emit("status", **self.status())
         return self.status()
 
-    def stop(self, sid: str | None = None, speakers="auto") -> dict:
+    def stop(self, sid: str | None = None, speakers="auto", note: str | None = None) -> dict:
+        """note: something the user should still see on the finished session (why it ended early)."""
         count = parse_speakers(speakers)
         with self._lock:
             a = self.active
@@ -365,7 +409,9 @@ class Manager:
         a.stop_ticker.set()
         duration = a.capture.stop()
         a.session.update(status="processing", duration=round(duration, 2), speakers_requested=count or "auto")
-        self._notify("Aku stopped recording", "Finishing the transcript…")
+        log.info("recording %s stopped after %.0fs", a.session.id, duration)
+        if note is None:
+            self._notify("Aku stopped recording", "Finishing the transcript…")
         self.bus.emit("status", **self.status())
         self._emit_session(a.session)
 
@@ -378,7 +424,7 @@ class Manager:
                 if lags:
                     a.session.update(lag={"median": round(float(np.median(lags)), 2), "max": round(max(lags), 2), "count": len(lags)})
                 self._diarize_and_merge(a.session, count, job)
-                a.session.update(status="naming", error=None)
+                a.session.update(status="naming", error=note)
                 self._notify("Transcript ready", "Open Aku to name the speakers.")
             finally:
                 self._views.pop(a.session.id, None)
@@ -413,10 +459,13 @@ class Manager:
             self.jobs[session.id] = job
 
         def runner() -> None:
+            started = time.monotonic()
             try:
                 with self._heavy:
                     work(job)
+                log.info("[%s] %s finished in %.0fs", session.id, kind, time.monotonic() - started)
             except Exception as e:  # noqa: BLE001 - shown to the user, session stays usable
+                log.exception("[%s] %s failed during: %s", session.id, kind, job.step)
                 changes = {"error": str(e)}
                 if on_error_status:
                     changes["status"] = on_error_status
@@ -469,7 +518,7 @@ class Manager:
                     mean = unit.mean(axis=0)
                     out[speaker] = [float(x) for x in mean / max(float(np.linalg.norm(mean)), 1e-9)]
         except Exception:  # noqa: BLE001 - without voiceprints the transcript is still fine
-            pass
+            log.exception("could not compute voiceprints for the cloud speaker labels")
         finally:
             worker.close()
         return out
@@ -736,6 +785,7 @@ class Manager:
             if s.meta.get("status") in ("recording", "processing"):
                 s.update(status="interrupted")
                 out.append(s.id)
+                log.warning("session %s was left unfinished by the last run; marked as interrupted", s.id)
         return out
 
     def recover(self, sid: str) -> dict:
@@ -803,8 +853,9 @@ class Manager:
             a.stop_ticker.set()
             duration = a.capture.stop()
             a.session.update(status="interrupted", duration=round(duration, 2))
+            log.warning("Aku is quitting during recording %s; it can be recovered on the next start", a.session.id)
             self.active = None
             try:
                 a.backend.close()
             except Exception:  # noqa: BLE001
-                pass
+                log.exception("could not close the transcription backend")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import threading
@@ -10,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 SAMPLE_RATE = 16000
+log = logging.getLogger(__name__)
 
 
 def _xdg(env: str, default: str) -> Path:
@@ -133,8 +135,8 @@ def get_secret(name: str) -> str | None:
         value = keyring.get_password(_KEYRING_SERVICE, name)
         if value:
             return value
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001 - no keyring service running
+        log.debug("keyring not readable for %s: %s", name, e)
     if name == "hf_token":
         token_file = Path.home() / ".cache" / "huggingface" / "token"
         if token_file.exists():
@@ -201,6 +203,14 @@ def download(url: str, dest: Path, progress=None) -> Path:
                 progress(done, total)
     tmp.replace(dest)
     return dest
+
+
+def free_bytes(path: Path) -> int:
+    """Free disk space where `path` lives (walks up to the nearest existing folder)."""
+    path = Path(path)
+    while not path.exists() and path != path.parent:
+        path = path.parent
+    return shutil.disk_usage(path).free
 
 
 def ensure_vad_model() -> Path:
