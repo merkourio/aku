@@ -1,6 +1,7 @@
 // M5 check: the full flow in the browser UI, no terminal.
 //
 // Needs the service running (aku serve) and ../scripts/make_test_audio.py run once.
+// It records, names, saves to a temp folder and deletes its own session again.
 // Uses silent virtual devices: nothing plays on real speakers, no real mic is used.
 //
 // Run:  cd frontend && node e2e/check_ui.mjs [http://127.0.0.1:4587]
@@ -118,8 +119,10 @@ try {
   await page.getByText('Anna Test').waitFor()
   check('remembered voice is listed in Settings', true)
   await shot('7-settings')
-  await page.getByRole('button', { name: 'Forget' }).first().click()
-  await page.getByText('No voices saved.').waitFor()
+  // only ever forget the test's own voice, never a real saved one
+  const row = page.locator('.row', { hasText: 'Anna Test' })
+  await row.getByRole('button', { name: 'Forget' }).click()
+  await row.waitFor({ state: 'detached' })
   check('Forget removes the voice', true)
 
   // delete audio (behind a warning), then the session
@@ -139,6 +142,15 @@ try {
   check('flow completed', false, e.message.split('\n')[0])
   await shot('error').catch(() => {})
 } finally {
+  // take the test's correction out of the vocabulary again
+  try {
+    const vocab = await (await fetch(base + '/vocab')).json()
+    const body = {
+      sets: vocab.sets.map((s) => ({ ...s, terms: s.terms.filter((t) => t !== 'Akufix') })).filter((s) => s.terms.length || s.name !== 'General'),
+      rules: vocab.rules.filter((r) => r.right !== 'Akufix'),
+    }
+    await fetch(base + '/vocab', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  } catch { /* service gone */ }
   for (const p of players) p.kill()
   await browser.close()
   for (const m of modules.reverse()) {

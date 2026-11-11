@@ -108,6 +108,7 @@ uv run python ../scripts/check_diarize.py      # speaker separation at several c
 uv run python ../scripts/check_recovery.py     # kill mid-recording and recover; improve; voiceprints
 bash ../scripts/check_tray.sh                  # tray icon and `aku toggle`
 cd ../frontend && npm test                     # UI unit tests
+npx playwright install chromium                # once
 node e2e/check_ui.mjs                          # the full flow in a headless browser (service must be running)
 ```
 
