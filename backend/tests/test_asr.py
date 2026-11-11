@@ -114,3 +114,54 @@ def test_openai_text_only_model_spreads_words():
     words = b.transcribe(np.zeros(SR * 3, dtype=np.int16))
     assert len(words) == 3 and abs(words[-1].end - 3.0) < 1e-6
     assert "timestamp_granularities" not in client.calls[0]
+
+
+def chunk(track, speech_seconds):
+    return Chunk(track=track, start=0, audio=np.zeros(SR, dtype=np.int16), valid_start=0.0, valid_end=1.0,
+                 speech_end=1.0, speech_seconds=speech_seconds)
+
+
+def test_fixed_language_is_always_used():
+    from aku.asr.live import LanguagePicker
+
+    picker = LanguagePicker("da")
+    assert picker.choose(chunk("mic", 0.5)) == "da" and picker.choose(chunk("system", 9.0)) == "da"
+
+
+def test_automatic_trusts_long_chunks_and_reuses_the_track_language_for_short_ones():
+    from aku.asr.live import LanguagePicker
+
+    picker = LanguagePicker("auto")
+    assert picker.choose(chunk("system", 1.0)) == "auto"  # nothing known yet
+    picker.learn(chunk("system", 6.0), "da")
+    picker.learn(chunk("mic", 6.0), "en")
+    picker.learn(chunk("mic", 0.8), "sv")  # a short chunk's detection is not trusted
+    assert picker.choose(chunk("system", 1.0)) == "da"  # "ja", "okay": use the track's language
+    assert picker.choose(chunk("mic", 1.0)) == "en"
+    assert picker.choose(chunk("system", 6.0)) == "auto"  # long enough to detect again
+
+
+def test_run_chunk_records_the_spoken_language():
+    from aku.asr.live import LanguagePicker, run_chunk
+
+    class Fake:
+        name, last_language = "fake", None
+        def transcribe(self, audio, prompt="", language="en"):
+            self.asked = (language, prompt)
+            self.last_language = "da" if language == "auto" else None
+            return [Word(0.1, 0.4, "hej")]
+
+    b = Fake()
+    seg = run_chunk(b, chunk("system", 5.0), LanguagePicker("auto"), lambda lang: f"prompt-{lang}")
+    assert b.asked == ("auto", "prompt-auto") and seg.language == "da"
+    seg = run_chunk(b, chunk("system", 5.0), LanguagePicker("el"), lambda lang: f"prompt-{lang}")
+    assert b.asked == ("el", "prompt-el") and seg.language == "el"
+
+
+def test_openai_automatic_leaves_the_language_out():
+    client = FakeOpenAI(R(text="Hej med dig", language="danish", words=[]))
+    b = OpenAIBackend("", "whisper-1", client=client)
+    b.transcribe(np.zeros(SR * 2, dtype=np.int16), language="auto")
+    assert "language" not in client.calls[0] and b.last_language == "da"
+    b.transcribe(np.zeros(SR * 2, dtype=np.int16), language="da")
+    assert client.calls[1]["language"] == "da"

@@ -26,7 +26,7 @@ export const api = {
   devices: () => req<Devices>('GET', '/devices'),
   sessions: () => req<SessionSummary[]>('GET', '/sessions'),
   session: (id: string) => req<SessionDetail>('GET', `/sessions/${enc(id)}`),
-  start: (body: Partial<Sources> & { backend?: string; vocab_sets?: string[] }) =>
+  start: (body: Partial<Sources> & { backend?: string; vocab_sets?: string[]; language?: string }) =>
     req<SessionSummary>('POST', '/sessions', body),
   stop: (id: string, speakers: number | 'auto') =>
     req<SessionSummary>('POST', `/sessions/${enc(id)}/stop`, { speakers }),

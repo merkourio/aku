@@ -21,13 +21,19 @@ aku doctor
 ## Use
 
 1. Open **Aku** from the app launcher (or run `aku open`). It opens in your browser at `http://127.0.0.1:4587/`.
-2. On **Record**, pick your microphone and what to capture from the computer: everything on an output device, or only specific apps (for example Teams). Aku remembers the choice.
+2. On **Record**, pick your microphone and what to capture from the computer: everything on an output device, or only specific apps (for example Teams). Pick the language spoken, or **Automatic**. Aku remembers these choices.
 3. Press **Start recording**. Lines appear a few seconds after someone speaks.
 4. Before pressing **Stop**, choose how many other speakers there were, or leave it on **Detect**.
 5. Aku separates the speakers. Play each clip, type a name, and tick **Remember this voice** if you want the name suggested next time.
 6. Give the transcript a title, check the folder, and press **Finalise and save Markdown**.
 
 Always wear headphones: on speakers, your microphone also hears the other side and their words show up twice.
+
+### Language
+
+Choose the language on the Record screen, or **Automatic** to let Aku detect it as people speak. Automatic also handles a call that mixes languages, for example Danish from the others and English from you. When you know the language, choosing it is a little more reliable, mostly for short replies like "ja" or "okay".
+
+The hotkey and `aku toggle` use the language of your last recording. The default is in Settings.
 
 ### Hotkey
 
@@ -105,11 +111,13 @@ uv run python ../scripts/check_capture.py      # both tracks match the wall cloc
 uv run python ../scripts/check_live.py         # record, live transcript, speakers, Markdown on a simulated call
 uv run python ../scripts/check_live.py --long  # 10 minutes of back-to-back speech
 uv run python ../scripts/check_diarize.py      # speaker separation at several call lengths
+uv run python ../scripts/check_language.py     # Danish chosen, Automatic, and a mixed Danish/English call
 uv run python ../scripts/check_recovery.py     # kill mid-recording and recover; improve; voiceprints
 bash ../scripts/check_tray.sh                  # tray icon and `aku toggle`
 cd ../frontend && npm test                     # UI unit tests
 npx playwright install chromium                # once
 node e2e/check_ui.mjs                          # the full flow in a headless browser (service must be running)
+node e2e/check_language.mjs                    # the language selector, on Danish speech
 ```
 
 Layout:
@@ -133,4 +141,4 @@ scripts/      install, whisper.cpp build, checks
 - [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (MIT) for transcription.
 - [pyannote.audio](https://github.com/pyannote/pyannote-audio) (MIT) and the WeSpeaker ResNet34 embedding model (CC BY 4.0) for telling speakers apart.
 - [Silero VAD](https://github.com/snakers4/silero-vad) (MIT) for finding speech.
-- Test recordings are built from [Mini LibriSpeech](https://www.openslr.org/31/) (CC BY 4.0).
+- Test recordings are built from [Mini LibriSpeech](https://www.openslr.org/31/) and [FLEURS](https://huggingface.co/datasets/google/fleurs) (both CC BY 4.0).

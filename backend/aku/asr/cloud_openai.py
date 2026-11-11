@@ -11,6 +11,7 @@ import numpy as np
 
 from ..audio import wav
 from ..config import SAMPLE_RATE as SR
+from ..config import language_code
 from .base import Word, is_non_speech, spread_words, tidy
 
 WORD_TIMESTAMP_MODELS = {"whisper-1"}
@@ -23,6 +24,7 @@ class OpenAIBackend:
         self.model = model
         self.name = f"openai:{model}"
         self.word_timestamps = model in WORD_TIMESTAMP_MODELS
+        self.last_language: str | None = None
         if client is None:
             from openai import OpenAI
 
@@ -32,12 +34,16 @@ class OpenAIBackend:
     def transcribe(self, audio: np.ndarray, prompt: str = "", language: str = "en") -> list[Word]:
         duration = len(audio) / SR
         file = ("chunk.wav", wav.encode(audio), "audio/wav")
+        # automatic: leave the language out and the API detects it
+        lang = {} if language == "auto" else {"language": language}
+        self.last_language = None
         if self.word_timestamps:
             kwargs = {"prompt": prompt} if prompt else {}
             r = self._client.audio.transcriptions.create(
-                model=self.model, file=file, language=language, temperature=0,
-                response_format="verbose_json", timestamp_granularities=["word"], **kwargs,
+                model=self.model, file=file, temperature=0,
+                response_format="verbose_json", timestamp_granularities=["word"], **lang, **kwargs,
             )
+            self.last_language = language_code(getattr(r, "language", None))
             words = [Word(float(w.start), float(w.end), str(w.word).strip()) for w in (getattr(r, "words", None) or [])]
             words = [w for w in words if w.text]
             text = (getattr(r, "text", "") or "").strip()
@@ -46,7 +52,7 @@ class OpenAIBackend:
             if not words:
                 return spread_words(text, 0.0, duration)
             return tidy(_restore_punctuation(words, text), duration)
-        r = self._client.audio.transcriptions.create(model=self.model, file=file, language=language, response_format="json")
+        r = self._client.audio.transcriptions.create(model=self.model, file=file, response_format="json", **lang)
         text = (getattr(r, "text", "") or "").strip()
         return [] if is_non_speech(text) else spread_words(text, 0.0, duration)
 

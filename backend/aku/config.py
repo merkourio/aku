@@ -41,6 +41,28 @@ def ensure_dirs() -> None:
         d.mkdir(parents=True, exist_ok=True)
 
 
+# Languages offered in the UI (all are Whisper languages). "auto" lets Whisper detect per chunk.
+AUTO = "auto"
+LANGUAGES: dict[str, str] = {
+    "auto": "Automatic", "en": "English", "da": "Danish", "el": "Greek",
+    "ar": "Arabic", "bg": "Bulgarian", "ca": "Catalan", "zh": "Chinese", "hr": "Croatian", "cs": "Czech",
+    "nl": "Dutch", "et": "Estonian", "fi": "Finnish", "fr": "French", "de": "German", "he": "Hebrew",
+    "hi": "Hindi", "hu": "Hungarian", "is": "Icelandic", "id": "Indonesian", "it": "Italian", "ja": "Japanese",
+    "ko": "Korean", "lv": "Latvian", "lt": "Lithuanian", "no": "Norwegian", "fa": "Persian", "pl": "Polish",
+    "pt": "Portuguese", "ro": "Romanian", "ru": "Russian", "sr": "Serbian", "sk": "Slovak", "sl": "Slovenian",
+    "es": "Spanish", "sv": "Swedish", "th": "Thai", "tr": "Turkish", "uk": "Ukrainian", "vi": "Vietnamese",
+}
+_CODE_BY_NAME = {name.lower(): code for code, name in LANGUAGES.items() if code != AUTO}
+
+
+def language_code(name: str | None) -> str | None:
+    """Whisper reports a detected language by its English name ("danish"): map it back to a code."""
+    if not name:
+        return None
+    name = name.strip().lower()
+    return name if name in LANGUAGES and name != AUTO else _CODE_BY_NAME.get(name)
+
+
 DEFAULTS: dict[str, Any] = {
     "user_name": "Me",
     "output_folder": str(Path.home() / "Documents" / "Aku"),

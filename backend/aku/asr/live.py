@@ -32,6 +32,7 @@ class Segment:
     lag: float | None = None  # seconds between end of speech and the text appearing
     backend: str = ""
     id: int = 0
+    language: str | None = None  # the chosen language, or the one detected in automatic mode
 
     def to_json(self) -> dict:
         return {
@@ -45,6 +46,7 @@ class Segment:
             "speech_end": round(self.speech_end, 3),
             "lag": None if self.lag is None else round(self.lag, 2),
             "backend": self.backend,
+            "language": self.language,
         }
 
     @classmethod
@@ -54,7 +56,7 @@ class Segment:
             words=[Word.from_json(w) for w in d.get("words", [])],
             chunk_start=d["chunk"][0], chunk_end=d["chunk"][1],
             speech_end=d.get("speech_end", d["end"]), lag=d.get("lag"),
-            backend=d.get("backend", ""), id=d.get("id", 0),
+            backend=d.get("backend", ""), id=d.get("id", 0), language=d.get("language"),
         )
 
 
@@ -78,6 +80,48 @@ def segment_from(chunk: Chunk, words: list[Word], backend_name: str, prompt: str
     )
 
 
+class LanguagePicker:
+    """Which language to ask for, per chunk.
+
+    A fixed language is used as is. In automatic mode Whisper detects the language
+    of each chunk, but its detection is unreliable on a second or two of speech
+    ("ja", "okay"): short chunks reuse the language last detected on that track.
+    """
+
+    SHORT = 3.0  # seconds of speech below which detection is not trusted
+
+    def __init__(self, language: str = "en"):
+        self.language = language
+        self._by_track: dict[str, str] = {}
+        self._latest: str | None = None
+
+    def choose(self, chunk: Chunk) -> str:
+        if self.language != config.AUTO:
+            return self.language
+        if chunk.speech_seconds < self.SHORT:
+            return self._by_track.get(chunk.track) or self._latest or config.AUTO
+        return config.AUTO
+
+    def learn(self, chunk: Chunk, detected: str | None) -> None:
+        if self.language == config.AUTO and detected and chunk.speech_seconds >= self.SHORT:
+            self._by_track[chunk.track] = self._latest = detected
+
+
+PromptFor = Callable[[str], str]  # language code (or "auto") -> Whisper prompt
+
+
+def run_chunk(backend: Backend, chunk: Chunk, picker: LanguagePicker, prompt_for: PromptFor) -> Segment | None:
+    language = picker.choose(chunk)
+    prompt = prompt_for(language)
+    words = backend.transcribe(chunk.audio, prompt, language)
+    spoken = language if language != config.AUTO else getattr(backend, "last_language", None)
+    picker.learn(chunk, spoken)
+    seg = segment_from(chunk, words, backend.name, prompt)
+    if seg is not None:
+        seg.language = spoken
+    return seg
+
+
 class Transcriber:
     """Live: attach to capture tracks. Chunks queue up and are transcribed in order."""
 
@@ -85,7 +129,7 @@ class Transcriber:
         self,
         backend: Backend,
         on_segment: Callable[[Segment], None],
-        prompt: Callable[[], str] = lambda: "",
+        prompt: PromptFor = lambda language: "",
         language: str = "en",
         session_time: Callable[[], float] | None = None,
         on_error: Callable[[str], None] | None = None,
@@ -93,7 +137,7 @@ class Transcriber:
         self.backend = backend
         self.on_segment = on_segment
         self.prompt = prompt
-        self.language = language
+        self.picker = LanguagePicker(language)
         self.session_time = session_time
         self.on_error = on_error or (lambda msg: None)
         self._queue: queue.Queue[Chunk | None] = queue.Queue()
@@ -116,9 +160,7 @@ class Transcriber:
         last: Exception | None = None
         for _ in range(2):  # one retry: the local server restarts itself if it died
             try:
-                prompt = self.prompt()
-                words = self.backend.transcribe(chunk.audio, prompt, self.language)
-                return segment_from(chunk, words, self.backend.name, prompt)
+                return run_chunk(self.backend, chunk, self.picker, self.prompt)
             except Exception as e:  # noqa: BLE001 - any backend failure is reported, not fatal
                 last = e
                 time.sleep(0.5)
@@ -151,25 +193,28 @@ def transcribe_file(
     track: str,
     backend: Backend,
     on_segment: Callable[[Segment], None],
-    prompt: str = "",
-    language: str = "en",
+    prompt: PromptFor = lambda language: "",
+    language: str | LanguagePicker = "en",
     start_sample: int = 0,
     progress: Callable[[float], None] | None = None,
     on_error: Callable[[str], None] | None = None,
 ) -> int:
-    """Offline pass over a WAV (recovery, quality pass). Returns the number of segments."""
+    """Offline pass over a WAV (recovery, quality pass). Returns the number of segments.
+
+    Pass one LanguagePicker for both tracks so automatic mode can share what it learned.
+    """
     total = wav.frames(path)
     count = 0
     errors = on_error or (lambda msg: None)
+    picker = language if isinstance(language, LanguagePicker) else LanguagePicker(language)
 
     def handle(chunk: Chunk) -> None:
         nonlocal count
         try:
-            words = backend.transcribe(chunk.audio, prompt, language)
+            seg = run_chunk(backend, chunk, picker, prompt)
         except Exception as e:  # noqa: BLE001
             errors(f"Transcription failed for {chunk.start_s:.0f}s-{chunk.end_s:.0f}s ({track}): {e}")
             return
-        seg = segment_from(chunk, words, backend.name, prompt)
         if seg is not None:
             count += 1
             on_segment(seg)

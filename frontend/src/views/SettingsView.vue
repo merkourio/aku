@@ -38,7 +38,7 @@ async function save(extra: Record<string, unknown> = {}) {
   if (!f) return
   const body = {
     user_name: f.user_name, output_folder: f.output_folder, backend: f.backend, local_model: f.local_model,
-    improve_model: f.improve_model, cloud_model: f.cloud_model, use_gpu: f.use_gpu, diarizer: f.diarizer,
+    improve_model: f.improve_model, cloud_model: f.cloud_model, use_gpu: f.use_gpu, diarizer: f.diarizer, language: f.language,
     notifications: f.notifications, tray: f.tray, active_vocab_sets: f.active_vocab_sets, ...extra,
   }
   const s = await aku.run(() => api.saveSettings(body))
@@ -140,6 +140,15 @@ function toggleActive(name: string, on: boolean) {
         <p v-if="!form.whisper_ready" class="small" style="color: var(--accent); margin: 0">
           whisper.cpp is not built yet. Run <code>scripts/build-whisper.sh</code>, or use the cloud backend.
         </p>
+        <label class="field">
+          Default language
+          <select v-model="form.language" @change="save()">
+            <option v-for="l in form.languages" :key="l.code" :value="l.code">
+              {{ l.code === 'auto' ? 'Automatic (detect)' : l.name }}
+            </option>
+          </select>
+          <span class="hint">You can change it per recording. The hotkey uses the language of your last recording.</span>
+        </label>
         <label class="field">
           Default engine
           <select v-model="form.backend" @change="save()">

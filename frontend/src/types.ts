@@ -51,6 +51,7 @@ export interface SessionSummary {
   status: SessionStatus
   backend: string | null
   improved_with: string | null
+  language: string
   output_path: string | null
   has_audio: boolean
   error: string | null
@@ -108,6 +109,7 @@ export interface Settings {
   has_hf_token: boolean
   diarizer_in_use: string
   models: Record<string, boolean>
+  languages: { code: string; name: string }[]
   whisper_ready: boolean
   version: string
 }

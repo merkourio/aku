@@ -13,7 +13,7 @@ import numpy as np
 
 from .. import config, diarize
 from ..asr.base import Backend
-from ..asr.live import Segment, Transcriber, transcribe_file
+from ..asr.live import LanguagePicker, Segment, Transcriber, transcribe_file
 from ..audio import pipewire, wav
 from ..audio.capture import Capture
 from ..config import SAMPLE_RATE as SR
@@ -68,6 +68,27 @@ def parse_speakers(value) -> int | None:
     if not 1 <= n <= 20:
         raise Invalid("speakers must be between 1 and 20")
     return n
+
+
+def parse_language(value) -> str:
+    """A language code Aku offers, or "auto"."""
+    code = str(value or "").strip().lower()
+    if code not in config.LANGUAGES:
+        raise Invalid(f"Unknown language {value!r}. Use a code like en or da, or auto.")
+    return code
+
+
+def prompt_maker(sets: list[str]):
+    """language -> Whisper prompt for these vocabulary sets (looked up once per language)."""
+    names = voiceprints.names()
+    cache: dict[str, str] = {}
+
+    def prompt_for(language: str) -> str:
+        if language not in cache:
+            cache[language] = vocab.build_prompt(sets, names, language)
+        return cache[language]
+
+    return prompt_for
 
 
 def normalise_sources(sources: dict | None) -> dict:
@@ -158,6 +179,7 @@ class Manager:
             "status": meta.get("status"),
             "backend": meta.get("backend_name"),
             "improved_with": meta.get("improved_with"),
+            "language": meta.get("language") or "en",
             "output_path": meta.get("output_path"),
             "has_audio": session.has_audio,
             "error": meta.get("error"),
@@ -207,7 +229,13 @@ class Manager:
 
     # -- recording -----------------------------------------------------------------
 
-    def start(self, sources: dict | None = None, backend: str | None = None, vocab_sets: list[str] | None = None) -> dict:
+    def start(
+        self,
+        sources: dict | None = None,
+        backend: str | None = None,
+        vocab_sets: list[str] | None = None,
+        language: str | None = None,
+    ) -> dict:
         with self._lock:
             if self.active:
                 raise Busy("Already recording.")
@@ -217,20 +245,20 @@ class Manager:
             if kind not in ("local", "cloud"):
                 raise Invalid('backend must be "local" or "cloud"')
             sets = settings["active_vocab_sets"] if vocab_sets is None else list(vocab_sets)
+            language = parse_language(language or settings["language"])
             be = self.make_backend(kind)
             session = new_session()
             user = settings["user_name"] or "Me"
             session.update(
                 id=session.id, created=datetime.now().astimezone().isoformat(timespec="seconds"),
                 status="recording", title="", duration=0, sources=sources, backend=kind,
-                backend_name=be.name, vocab_sets=sets, language=settings["language"], user_name=user,
+                backend_name=be.name, vocab_sets=sets, language=language, user_name=user,
             )
-            config.save_settings({"last_sources": sources, "active_vocab_sets": sets, "backend": kind})
-            prompt = vocab.build_prompt(sets, voiceprints.names())
+            config.save_settings({"last_sources": sources, "active_vocab_sets": sets, "backend": kind, "language": language})
             capture = Capture(session.dir, sources, tag=session.id[-6:])
             transcriber = Transcriber(
-                be, on_segment=lambda seg: self._on_segment(session.id, seg), prompt=lambda: prompt,
-                language=settings["language"], session_time=capture.elapsed,
+                be, on_segment=lambda seg: self._on_segment(session.id, seg), prompt=prompt_maker(sets),
+                language=language, session_time=capture.elapsed,
                 on_error=lambda msg: self.bus.emit("error", session=session.id, message=msg),
             )
             for name, track in capture.tracks.items():
@@ -497,7 +525,8 @@ class Manager:
 
         def work(job: Job) -> None:
             meta = session.meta
-            prompt = vocab.build_prompt(meta.get("vocab_sets") or [], voiceprints.names())
+            prompt = prompt_maker(meta.get("vocab_sets") or [])
+            picker = LanguagePicker(meta.get("language") or "en")  # one for both tracks
             new: list[Segment] = []
             total = sum(wav.frames(session.track(t)) for t in ("mic", "system")) or 1
             done = 0
@@ -510,7 +539,7 @@ class Manager:
                 for track in ("mic", "system"):
                     size = wav.frames(session.track(track))
                     transcribe_file(
-                        session.track(track), track, backend, new.append, prompt, meta.get("language", "en"),
+                        session.track(track), track, backend, new.append, prompt, picker,
                         progress=lambda p, d=done, n=size: self._step(job, "Re-transcribing", (d + p * n) / total),
                         on_error=errors.append,
                     )
@@ -624,7 +653,8 @@ class Manager:
             session.update(duration=round(longest / SR, 2), status="processing")
             existing = session.segments()
             next_id = max((s.id for s in existing), default=0) + 1
-            prompt = vocab.build_prompt(meta.get("vocab_sets") or [], voiceprints.names())
+            prompt = prompt_maker(meta.get("vocab_sets") or [])
+            picker = LanguagePicker(meta.get("language") or "en")
 
             def add(seg: Segment) -> None:
                 nonlocal next_id
@@ -640,7 +670,7 @@ class Manager:
                 for i, track in enumerate(("mic", "system")):
                     resume = max((s.chunk_end for s in existing if s.track == track), default=0.0)
                     transcribe_file(
-                        session.track(track), track, backend, add, prompt, meta.get("language", "en"),
+                        session.track(track), track, backend, add, prompt, picker,
                         start_sample=int(resume * SR),
                         progress=lambda p, i=i: self._step(job, "Finishing transcription", (i + p) / 2),
                         on_error=errors.append,

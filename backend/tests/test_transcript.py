@@ -148,3 +148,12 @@ def test_voiceprints_match_suggest_and_forget():
     assert got["X"][0] == "Anna" and "Y" not in got  # one saved voice names one speaker
     assert voiceprints.forget("Anna") == 1
     assert voiceprints.names() == ["Bo"]
+
+
+def test_prompt_follows_the_language():
+    assert vocab.build_prompt([], [], "da") == vocab.STYLE_PROMPTS["da"]
+    assert vocab.build_prompt([], [], "auto") == ""  # an English sentence would pull other languages towards English
+    assert vocab.build_prompt([], [], "el") == ""
+    vocab.add_term("ExampleCo", "Work")
+    assert vocab.build_prompt(["Work"], [], "en") == "Glossary: ExampleCo."
+    assert vocab.build_prompt(["Work"], [], "da") == "ExampleCo."

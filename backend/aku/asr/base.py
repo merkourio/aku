@@ -26,9 +26,13 @@ class Word:
 class Backend(Protocol):
     name: str
     word_timestamps: bool
+    last_language: str | None  # language code detected in the last call, when language was "auto"
 
     def transcribe(self, audio: np.ndarray, prompt: str = "", language: str = "en") -> list[Word]:
-        """Transcribe 16 kHz mono int16 audio. Word times are seconds from the start of `audio`."""
+        """Transcribe 16 kHz mono int16 audio. Word times are seconds from the start of `audio`.
+
+        language is a code like "en" or "da", or "auto" to let the model detect it.
+        """
         ...
 
     def close(self) -> None: ...

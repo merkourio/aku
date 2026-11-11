@@ -13,6 +13,7 @@ const router = useRouter()
 
 const sources = ref<Sources>({ input: null, output: null, scope: 'all', apps: [] })
 const backend = ref<'local' | 'cloud'>('local')
+const language = ref('en')
 const sets = ref<VocabSet[]>([])
 const activeSets = ref<string[]>([])
 const speakers = ref<number | 'auto'>('auto')
@@ -27,6 +28,7 @@ onMounted(async () => {
   if (s) {
     sources.value = { ...s.last_sources, apps: [...s.last_sources.apps] }
     backend.value = s.backend
+    language.value = s.language
     activeSets.value = [...s.active_vocab_sets]
   }
   const v = await aku.run(() => api.vocab())
@@ -74,7 +76,7 @@ const needsKey = computed(() => backend.value === 'cloud' && aku.settings && !ak
 
 async function start() {
   busy.value = true
-  await aku.run(() => api.start({ ...sources.value, backend: backend.value, vocab_sets: activeSets.value }))
+  await aku.run(() => api.start({ ...sources.value, backend: backend.value, vocab_sets: activeSets.value, language: language.value }))
   busy.value = false
 }
 
@@ -106,6 +108,17 @@ function level(track: string): string {
       </div>
 
       <div class="panel stack">
+        <label class="field">
+          Language spoken
+          <select v-model="language">
+            <option v-for="l in aku.settings?.languages ?? []" :key="l.code" :value="l.code">
+              {{ l.code === 'auto' ? 'Automatic (detect)' : l.name }}
+            </option>
+          </select>
+          <span v-if="language === 'auto'" class="hint">
+            Aku detects the language as people speak, so a call can mix languages. Choose one language when you know it: that is a little more reliable.
+          </span>
+        </label>
         <label class="field">
           Transcription
           <select v-model="backend">

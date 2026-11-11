@@ -151,7 +151,7 @@ def cmd_record(args) -> None:
 
     manager.bus.subscribe(on_event)
     sources = {"input": args.input, "output": args.output, "scope": "apps" if args.app else "all", "apps": args.app or []}
-    s = manager.start(sources, backend=args.backend)
+    s = manager.start(sources, backend=args.backend, language=args.language)
     sid = s["id"]
     print(f"Recording (session {sid}). Press Ctrl+C to stop.\n")
     try:
@@ -276,6 +276,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--app", action="append", help="only capture this app (key from `aku devices`); repeatable")
     p.add_argument("--speakers", help='"auto" or the number of other speakers (asked if omitted)')
     p.add_argument("--backend", choices=["local", "cloud"])
+    p.add_argument("--language", help='language code such as en or da, or "auto" (default: your last choice)')
     p.add_argument("--seconds", type=float, help="stop by itself after this long")
     p.add_argument("--title")
     p.add_argument("--out", help="output folder (default from settings)")

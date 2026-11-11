@@ -44,6 +44,7 @@ class WhisperCpp:
         self.use_gpu = use_gpu
         self.threads = threads
         self.on_progress = on_progress
+        self.last_language: str | None = None
         self._proc: subprocess.Popen | None = None
         self._client: httpx.Client | None = None
         self._lock = threading.Lock()
@@ -121,6 +122,7 @@ class WhisperCpp:
             raise WhisperError(f"whisper-server request failed: {e}") from e
         if "error" in body:
             raise WhisperError(str(body["error"]))
+        self.last_language = config.language_code(body.get("detected_language") or body.get("language"))
         # The server splits segments by length, sometimes mid-word: merge tokens across segments.
         tokens = []
         for seg in body.get("segments") or []:

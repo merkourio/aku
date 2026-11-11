@@ -9,8 +9,11 @@ from .. import db
 
 PROMPT_CHARS = 700  # ~224 Whisper tokens is the hard limit; stay under it
 DEFAULT_SET = "General"
-# Without any prompt Whisper drops punctuation and capitals on some chunks; a neutral one fixes most.
+# Without any prompt Whisper drops punctuation and capitals on some chunks; a neutral sentence in the
+# spoken language fixes most. An English sentence would nudge other languages towards English,
+# so languages without an entry (and automatic mode) get no style prompt.
 STYLE_PROMPT = "Hello. Okay, so here is what I think."
+STYLE_PROMPTS = {"en": STYLE_PROMPT, "da": "Hej. Okay, her er, hvad jeg tænker."}
 
 
 def list_sets() -> list[dict]:
@@ -71,7 +74,7 @@ def add_rule(wrong: str, right: str, set_name: str | None = None) -> dict:
     return {"wrong": wrong, "right": right, "set": set_name or DEFAULT_SET}
 
 
-def build_prompt(active_sets: list[str], names: list[str] | None = None) -> str:
+def build_prompt(active_sets: list[str], names: list[str] | None = None, language: str = "en") -> str:
     """Whisper's initial prompt: active terms, newest first, within the token limit."""
     wanted = {s.lower() for s in active_sets}
     terms: list[str] = []
@@ -85,7 +88,10 @@ def build_prompt(active_sets: list[str], names: list[str] | None = None) -> str:
             break
         out.append(t)
         size += len(t) + 2
-    return "Glossary: " + ", ".join(out) + "." if out else STYLE_PROMPT
+    if not out:
+        return STYLE_PROMPTS.get(language, "")
+    # the word "Glossary" is English: only use it when English is being spoken
+    return ("Glossary: " if language == "en" else "") + ", ".join(out) + "."
 
 
 def compile_rules(rules: list[dict] | None = None) -> list[tuple[re.Pattern, str]]:

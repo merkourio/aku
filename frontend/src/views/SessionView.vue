@@ -47,6 +47,10 @@ watch(() => props.id, () => { detail.value = null; title.value = ''; folder.valu
 watch(() => aku.changed[props.id], () => void load())
 
 const job = computed(() => aku.status.jobs[props.id] ?? null)
+const languageName = computed(() => {
+  const code = detail.value?.language ?? 'en'
+  return aku.settings?.languages.find((l) => l.code === code)?.name ?? code
+})
 const status = computed(() => detail.value?.status)
 const ready = computed(() => status.value === 'naming' || status.value === 'finalised')
 const isRecording = computed(() => aku.status.recording && aku.status.session === props.id)
@@ -163,7 +167,7 @@ async function saveFix() {
         <div class="grow">
           <h1>{{ detail.title || 'Untitled call' }}</h1>
           <p class="muted small">
-            {{ when(detail.created) }} · {{ clock(detail.duration) }} · {{ detail.improved_with ?? detail.backend }}
+            {{ when(detail.created) }} · {{ clock(detail.duration) }} · {{ languageName }} · {{ detail.improved_with ?? detail.backend }}
           </p>
         </div>
         <span class="badge" :class="detail.status">{{ statusLabel[detail.status] ?? detail.status }}</span>

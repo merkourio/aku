@@ -101,3 +101,14 @@ def test_session_flow_over_http(client, tmp_path):
 def test_cloud_backend_needs_a_key(client):
     r = client.post("/sessions", json={"backend": "cloud"})
     assert r.status_code == 400 and "API key" in r.json()["detail"]
+
+
+def test_language_setting_and_validation(client):
+    s = client.get("/settings").json()
+    assert s["language"] == "en" and s["languages"][0] == {"code": "auto", "name": "Automatic"}
+    assert {"code": "da", "name": "Danish"} in s["languages"]
+    assert client.put("/settings", json={"language": "DA"}).json()["language"] == "da"
+    assert client.put("/settings", json={"language": "auto"}).json()["language"] == "auto"
+    assert client.put("/settings", json={"language": "klingon"}).status_code == 400
+    r = client.post("/sessions", json={"language": "klingon"})
+    assert r.status_code == 400 and "Unknown language" in r.json()["detail"]

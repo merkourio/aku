@@ -5,6 +5,7 @@ Creates in ~/.cache/aku-test:
   call_system.wav      a 3-speaker "call" (the other side)
   call_mic.wav         a 4th speaker on the same timeline (me)
   call_truth.json      who said what, when
+  danish.wav           about a minute of Danish (FLEURS), danish.txt its text
 
 Run:  cd backend && uv run python ../scripts/make_test_audio.py
 """
@@ -53,7 +54,42 @@ def load(path: Path) -> np.ndarray:
     return audio
 
 
+FLEURS = "https://huggingface.co/datasets/google/fleurs/resolve/main/data/da_dk"
+
+
+def danish(count: int = 12) -> None:
+    """A minute or so of Danish from FLEURS (CC BY 4.0): danish.wav + danish.txt."""
+    if (ROOT / "danish.wav").exists():
+        return
+    rows = {}
+    with urllib.request.urlopen(f"{FLEURS}/dev.tsv") as r:
+        for line in r.read().decode().splitlines():
+            cols = line.split("\t")
+            rows[cols[1]] = cols[3]
+    parts, texts = [], []
+    # the archive is large: read it as a stream and stop after the first few clips
+    with urllib.request.urlopen(f"{FLEURS}/audio/dev.tar.gz") as r, tarfile.open(fileobj=r, mode="r|gz") as tar:
+        for member in tar:
+            name = Path(member.name).name
+            if not member.isfile() or name not in rows:
+                continue
+            tmp = ROOT / "fleurs_tmp.wav"
+            tmp.write_bytes(tar.extractfile(member).read())
+            audio, sr = sf.read(tmp, dtype="float32")  # FLEURS clips are float WAVs
+            tmp.unlink()
+            assert sr == SR
+            audio = (np.clip(audio / max(1e-9, np.abs(audio).max()) * 0.7, -1, 1) * 32767).astype(np.int16)
+            parts += [audio, np.zeros(int(0.8 * SR), dtype=np.int16)]
+            texts.append(rows[name])
+            if len(texts) >= count:
+                break
+    sf.write(ROOT / "danish.wav", np.concatenate(parts), SR)
+    (ROOT / "danish.txt").write_text("\n".join(texts))
+    print(f"danish.wav {sum(len(x) for x in parts)/SR:.0f}s, {len(texts)} sentences")
+
+
 def main() -> None:
+    danish()
     rng = random.Random(7)
     utts = utterances(corpus())
     speakers = sorted(utts, key=lambda s: -len(utts[s]))

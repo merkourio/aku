@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from .. import __version__, config
 from ..diarize import choose_engine, voiceprints
-from ..sessions.manager import Busy, Invalid, Manager, NotFound
+from ..sessions.manager import Busy, Invalid, Manager, NotFound, parse_language
 from ..vocab import store as vocab
 from .security import LocalOnly
 
@@ -29,6 +29,7 @@ class StartBody(BaseModel):
     apps: list[str] | None = None
     backend: str | None = None
     vocab_sets: list[str] | None = None
+    language: str | None = None
 
 
 class SpeakersBody(BaseModel):
@@ -68,6 +69,7 @@ def settings_view() -> dict:
     s["diarizer_in_use"] = choose_engine(s["diarizer"])
     s["models"] = {m: config.model_path(m).exists() for m in KNOWN_MODELS}
     s["whisper_ready"] = config.whisper_bin("whisper-server") is not None
+    s["languages"] = [{"code": code, "name": name} for code, name in config.LANGUAGES.items()]
     s["version"] = __version__
     return s
 
@@ -147,7 +149,7 @@ def create_app(manager: Manager | None = None, port: int | None = None, tray: bo
             for key in ("input", "output"):  # explicit null means "default device"
                 if key in body.model_fields_set and getattr(body, key) is None:
                     sources[key] = None
-        return manager.start(sources, body.backend, body.vocab_sets)
+        return manager.start(sources, body.backend, body.vocab_sets, body.language)
 
     @app.get("/sessions")
     def sessions():
@@ -221,6 +223,8 @@ def create_app(manager: Manager | None = None, port: int | None = None, tray: bo
             raise Invalid('backend must be "local" or "cloud"')
         if "diarizer" in body and body["diarizer"] not in ("auto", "pyannote", "basic"):
             raise Invalid("unknown diarizer")
+        if "language" in body:
+            body["language"] = parse_language(body["language"])
         if "output_folder" in body:
             folder = Path(str(body["output_folder"])).expanduser()
             if not folder.is_absolute():
