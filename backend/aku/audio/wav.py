@@ -45,7 +45,8 @@ class WavWriter:
         self.frames += len(pcm)
 
     def flush(self) -> None:
-        self._f.flush()
+        if not self._f.closed:
+            self._f.flush()
 
     def close(self) -> None:
         if self._f.closed:

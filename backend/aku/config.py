@@ -70,12 +70,16 @@ DEFAULTS: dict[str, Any] = {
     "local_model": "large-v3-turbo",
     "improve_model": "large-v3",
     "cloud_model": "whisper-1",
+    "cloud_diarize_model": "gpt-4o-transcribe-diarize",  # Improve engine with its own speaker labels
     "use_gpu": True,
     "language": "en",
     "diarizer": "auto",  # auto | pyannote | basic
+    "live_diarization": True,  # show speakers during the call (built-in method)
     "port": 4587,
     "whisper_port": 4588,
     "notifications": True,
+    "global_shortcut": False,  # hotkey through the desktop's GlobalShortcuts portal
+    "shortcut_trigger": "CTRL+ALT+r",  # only a suggestion: the desktop's dialog has the last word
     "tray": True,
     "active_vocab_sets": [],
     "last_sources": {"input": None, "output": None, "scope": "all", "apps": []},

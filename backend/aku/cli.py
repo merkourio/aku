@@ -50,7 +50,9 @@ def cmd_serve(args) -> None:
     if args.open:
         subprocess.Popen(["xdg-open", f"http://127.0.0.1:{port}/"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     # An open browser tab keeps a WebSocket alive; without a limit, quitting would wait for it forever.
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning", timeout_graceful_shutdown=3)
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", timeout_graceful_shutdown=3))
+    app.state.server = server  # lets open WebSockets notice that Aku is quitting
+    server.run()
 
 
 def cmd_toggle(args) -> None:

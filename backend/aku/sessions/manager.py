@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import threading
 import time
@@ -12,15 +13,20 @@ from pathlib import Path
 import numpy as np
 
 from .. import config, diarize
-from ..asr.base import Backend
+from ..asr import cloud_diarize
+from ..asr.base import Backend, spread_words
 from ..asr.live import LanguagePicker, Segment, Transcriber, transcribe_file
 from ..audio import pipewire, wav
 from ..audio.capture import Capture
 from ..config import SAMPLE_RATE as SR
 from ..diarize import voiceprints
+from ..diarize import cluster
+from ..diarize.live import EmbedWorker, LiveDiarizer
+from ..diarize.worker import BASIC_SPACE
 from ..events import EventBus, notify
 from ..vocab import store as vocab
 from . import markdown, merge
+from .liveview import LiveView
 from .store import Session, all_sessions, new_session
 
 
@@ -44,6 +50,10 @@ class Active:
     backend: Backend
     rules: list
     user_name: str
+    view: LiveView
+    live: LiveDiarizer | None = None  # live speaker separation, when switched on
+    live_count: int | None = None  # speaker count set during the call (None = detect)
+    live_found: int = 0
     next_id: int = 1
     stop_ticker: threading.Event = field(default_factory=threading.Event)
     mic_quiet: float = 0.0  # seconds of pure digital silence on the mic (hardware mute?)
@@ -108,6 +118,7 @@ class Manager:
         self.active: Active | None = None
         self.jobs: dict[str, Job] = {}
         self.download: dict | None = None
+        self._views: dict[str, LiveView] = {}  # live transcript of sessions being recorded or finished
         self._lock = threading.RLock()
         self._heavy = threading.Lock()  # one GPU/CPU-heavy job at a time
         config.ensure_dirs()
@@ -161,6 +172,7 @@ class Manager:
             "capture_errors": a.capture.errors() if a else {},
             "mic_silent": bool(a and a.mic_quiet >= 8),
             "download": self.download,
+            "live": {"enabled": a.live is not None, "speakers": a.live_count or "auto", "found": a.live_found} if a else None,
             "jobs": {sid: {"kind": j.kind, "step": j.step, "progress": j.progress} for sid, j in self.jobs.items()},
         }
         return out
@@ -202,7 +214,10 @@ class Manager:
             diarizer=speakers.get("engine"),
             user_name=user,
         )
-        if meta.get("status") in ("recording", "processing", "interrupted", "error") and not session.transcript_path.exists():
+        if sid in self._views and meta.get("status") in ("recording", "processing"):
+            out["lines"] = self._views[sid].all()  # as shown live, speakers included
+            out["speakers"] = []
+        elif meta.get("status") in ("recording", "processing", "interrupted", "error") and not session.transcript_path.exists():
             rules = vocab.compile_rules()
             segs = sorted(session.segments(), key=lambda s: s.start)
             out["lines"] = [
@@ -263,7 +278,15 @@ class Manager:
             )
             for name, track in capture.tracks.items():
                 track.listeners.append(transcriber.chunker(name).feed)
-            active = Active(session, capture, transcriber, be, vocab.compile_rules(), user)
+            rules = vocab.compile_rules()
+            view = self._views[session.id] = LiveView(user, rules)
+            active = Active(session, capture, transcriber, be, rules, user, view)
+            if settings["live_diarization"]:
+                active.live = LiveDiarizer(
+                    session.system, flush=capture.system.wav.flush,
+                    on_turns=lambda turns, found: self._on_live_turns(active, turns, found),
+                    on_error=lambda msg: self.bus.emit("error", session=session.id, message=msg),
+                )
             self.active = active
             capture.start()
             for msg in capture.warnings:
@@ -304,12 +327,30 @@ class Manager:
         name = user if seg.track == "mic" else "Them"
         with open(session.temp_md, "a") as f:
             f.write(markdown.line_md(seg.start, name, text) + "\n\n")
-        self.bus.emit(
-            "segment", session=sid,
-            segment={"id": seg.id, "start": round(seg.start, 2), "end": round(seg.end, 2),
-                     "speaker": merge.ME if seg.track == "mic" else merge.THEM, "name": name,
-                     "text": text, "lag": seg.lag},
-        )
+        whole = {"id": seg.id, "segment": seg.id, "start": round(seg.start, 2), "end": round(seg.end, 2),
+                 "speaker": merge.ME if seg.track == "mic" else merge.THEM, "name": name, "text": text, "lag": seg.lag}
+        view = self._views.get(sid)
+        # `segment` is the whole segment; `lines` is how to show it (split by speaker once known)
+        self.bus.emit("segment", session=sid, segment=whole, lines=view.add(seg) if view else [whole])
+        if seg.track == "system" and a and a.session.id == sid and a.live:
+            a.live.add(seg.chunk_start, seg.chunk_end)
+
+    def _on_live_turns(self, active: Active, turns: list[dict], found: int) -> None:
+        active.live_found = found
+        for seg_id, lines in active.view.relabel(turns).items():
+            self.bus.emit("relabel", session=active.session.id, segment=seg_id, lines=lines)
+
+    def set_live_speakers(self, sid: str, speakers) -> dict:
+        """During a call: how many other speakers there are so far ("auto" = detect)."""
+        count = parse_speakers(speakers)
+        a = self.active
+        if a is None or a.session.id != sid:
+            raise Invalid("That session is not recording.")
+        a.live_count = count
+        if a.live:
+            a.live.set_speakers(count)
+        self.bus.emit("status", **self.status())
+        return self.status()
 
     def stop(self, sid: str | None = None, speakers="auto") -> dict:
         count = parse_speakers(speakers)
@@ -318,6 +359,9 @@ class Manager:
             if a is None or (sid and sid != a.session.id):
                 raise Invalid("That session is not recording.")
             self.active = None
+        count = count or a.live_count  # a count set during the call also holds for the final pass
+        if a.live:
+            a.live.close()  # frees the CPU for the full pass
         a.stop_ticker.set()
         duration = a.capture.stop()
         a.session.update(status="processing", duration=round(duration, 2), speakers_requested=count or "auto")
@@ -326,15 +370,18 @@ class Manager:
         self._emit_session(a.session)
 
         def work(job: Job) -> None:
-            self._step(job, "Finishing transcription")
-            a.transcriber.finish()
-            a.backend.close()
-            lags = a.transcriber.lags
-            if lags:
-                a.session.update(lag={"median": round(float(np.median(lags)), 2), "max": round(max(lags), 2), "count": len(lags)})
-            self._diarize_and_merge(a.session, count, job)
-            a.session.update(status="naming", error=None)
-            self._notify("Transcript ready", "Open Aku to name the speakers.")
+            try:
+                self._step(job, "Finishing transcription")
+                a.transcriber.finish()
+                a.backend.close()
+                lags = a.transcriber.lags
+                if lags:
+                    a.session.update(lag={"median": round(float(np.median(lags)), 2), "max": round(max(lags), 2), "count": len(lags)})
+                self._diarize_and_merge(a.session, count, job)
+                a.session.update(status="naming", error=None)
+                self._notify("Transcript ready", "Open Aku to name the speakers.")
+            finally:
+                self._views.pop(a.session.id, None)
 
         self._run_job(a.session, "finish", work, on_error_status="error")
         return self.summary(a.session)
@@ -343,6 +390,14 @@ class Manager:
         if self.active:
             return {"action": "stopped", "session": self.stop()}
         return {"action": "started", "session": self.start()}
+
+    def toggle_safely(self) -> None:
+        """For the tray and the hotkey, where nobody is waiting for an answer: report problems instead of raising."""
+        try:
+            self.toggle()
+        except Exception as e:  # noqa: BLE001 - e.g. no API key for the cloud backend
+            self.bus.emit("error", session=None, message=str(e))
+            self._notify("Aku could not start recording", str(e))
 
     # -- jobs ------------------------------------------------------------------------
 
@@ -383,18 +438,46 @@ class Manager:
 
     # -- diarization + merge -----------------------------------------------------------
 
+    def _previous_names(self, session: Session) -> dict | None:
+        """Who was named in the current speaker separation, to carry names over to a new one."""
+        old = session.diarization
+        if not old:
+            return None
+        return {
+            "turns": old.get("exclusive") or [],
+            "named": {s["label"]: {"name": s.get("name"), "remember": s.get("remember", False)}
+                      for s in session.speakers.get("speakers", {}).values() if s.get("name")},
+        }
+
+    def _voice_embeddings(self, wav_path: Path, turns: list[dict]) -> dict[str, list[float] | None]:
+        """A voiceprint per speaker for turns that came without one (cloud speaker labels)."""
+        out: dict[str, list[float] | None] = {t["speaker"]: None for t in turns}
+        worker = EmbedWorker()
+        try:
+            worker.start()
+            for speaker in out:
+                spans = [(int(t["start"] * SR), int(t["end"] * SR)) for t in turns
+                         if t["speaker"] == speaker and t["end"] - t["start"] >= 1.0]
+                windows = [(a, b) for _, a, b in cluster.make_windows(spans)]
+                if not windows:
+                    continue
+                windows = [windows[i] for i in sorted({int(x) for x in np.linspace(0, len(windows) - 1, 24)})]
+                vectors = worker.embed(wav_path, windows)
+                vectors = vectors[np.all(np.isfinite(vectors), axis=1)]
+                if len(vectors):
+                    unit = vectors / np.maximum(np.linalg.norm(vectors, axis=1, keepdims=True), 1e-9)
+                    mean = unit.mean(axis=0)
+                    out[speaker] = [float(x) for x in mean / max(float(np.linalg.norm(mean)), 1e-9)]
+        except Exception:  # noqa: BLE001 - without voiceprints the transcript is still fine
+            pass
+        finally:
+            worker.close()
+        return out
+
     def _diarize_and_merge(self, session: Session, speakers: int | None, job: Job) -> None:
         has_them = any(s.track == "system" for s in session.segments())
         if has_them and session.system.exists():
-            old = session.diarization
-            old_speakers = session.speakers.get("speakers", {})
-            previous = None
-            if old:
-                previous = {
-                    "turns": old.get("exclusive") or [],
-                    "named": {s["label"]: {"name": s.get("name"), "remember": s.get("remember", False)}
-                              for s in old_speakers.values() if s.get("name")},
-                }
+            previous = self._previous_names(session)
 
             def progress(p: float, step: str) -> None:
                 job.step, job.progress = step or "Separating speakers", p
@@ -512,8 +595,8 @@ class Manager:
 
     def improve(self, sid: str, engine: str) -> dict:
         session = self.session(sid)
-        if engine not in ("local_large", "cloud"):
-            raise Invalid('engine must be "local_large" or "cloud"')
+        if engine not in ("local_large", "cloud", "cloud_diarize"):
+            raise Invalid('engine must be "local_large", "cloud" or "cloud_diarize"')
         if session.meta.get("status") not in ("naming", "finalised"):
             raise Invalid("This session is not ready for that yet.")
         if not session.has_audio:
@@ -521,7 +604,8 @@ class Manager:
         if self.active:
             raise Busy("Stop the current recording first.")
         settings = self._settings()
-        backend = self.make_backend("cloud") if engine == "cloud" else self.make_backend("local", settings["improve_model"], 1)
+        backend = self.make_backend("local", settings["improve_model"], 1) if engine == "local_large" else self.make_backend("cloud")
+        diarize_model = settings["cloud_diarize_model"] if engine == "cloud_diarize" else None
 
         def work(job: Job) -> None:
             meta = session.meta
@@ -536,7 +620,7 @@ class Manager:
                 if hasattr(backend, "start"):
                     backend.on_progress = lambda got, size: self._step(job, f"Downloading model {backend.model}", got / size if size else None)
                     backend.start()
-                for track in ("mic", "system"):
+                for track in ("mic",) if diarize_model else ("mic", "system"):
                     size = wav.frames(session.track(track))
                     transcribe_file(
                         session.track(track), track, backend, new.append, prompt, picker,
@@ -544,10 +628,35 @@ class Manager:
                         on_error=errors.append,
                     )
                     done += size
+                if diarize_model:
+                    # the other side goes up whole; the model returns text already split by speaker
+                    labelled = cloud_diarize.transcribe_track(
+                        backend.client, diarize_model, session.system,
+                        progress=lambda p, d=done: self._step(job, "Uploading the other side", (d + p * (total - d)) / total),
+                    )
             finally:
                 backend.close()
             if errors and not new:
                 raise RuntimeError(errors[0])
+            name = backend.name
+            if diarize_model:
+                name = f"{backend.name} + {diarize_model}"
+                new += [
+                    Segment(track="system", start=s["start"], end=s["end"], text=s["text"],
+                            words=spread_words(s["text"], s["start"], s["end"]),
+                            chunk_start=s["start"], chunk_end=s["end"], speech_end=s["end"], backend=f"openai:{diarize_model}")
+                    for s in labelled
+                ]
+                turns = cloud_diarize.exclusive_turns(labelled)
+                self._step(job, "Making voiceprints")
+                embeddings = self._voice_embeddings(session.system, turns)
+                result = {"engine": "openai", "space": BASIC_SPACE, "turns": turns, "exclusive": turns,
+                          "speakers": [{"label": label, "embedding": emb} for label, emb in embeddings.items()]}
+                previous = self._previous_names(session)  # names move to the new labels by overlap
+                if session.diarization_path.exists():
+                    shutil.copy2(session.diarization_path, session.dir / "diarization.prev.json")
+                session.diarization_path.write_text(json.dumps(result))
+                session.save_speakers(merge.build_speakers(result, previous))
             new.sort(key=lambda s: s.start)
             for i, seg in enumerate(new, start=1):
                 seg.id = i
@@ -555,7 +664,7 @@ class Manager:
             session.segments_path.write_text("")
             for seg in new:
                 session.append_segment(seg)
-            session.update(improved_with=backend.name, error=errors[0] if errors else None)
+            session.update(improved_with=name, error=errors[0] if errors else None)
             self._step(job, "Building transcript")
             self._rebuild(session, keep_previous=True)  # names and diarization are kept, mapped onto the new text
 
@@ -566,8 +675,7 @@ class Manager:
 
     def fix(self, wrong: str, right: str, set_name: str | None = None, sid: str | None = None) -> dict:
         rule = vocab.add_rule(wrong, right, set_name)
-        if self.active:
-            self.active.rules = vocab.compile_rules()
+        self.rules_changed()
         if sid:
             session = self.session(sid)
             if session.transcript_path.exists():
@@ -577,6 +685,7 @@ class Manager:
     def rules_changed(self) -> None:
         if self.active:
             self.active.rules = vocab.compile_rules()
+            self.active.view.refresh(self.active.rules)
 
     # -- audio + deletion ------------------------------------------------------------------------
 
@@ -688,6 +797,9 @@ class Manager:
         """Service is exiting: stop a running recording cleanly (it stays recoverable)."""
         a = self.active
         if a:
+            if a.live:
+                a.live.close()
+            self._views.pop(a.session.id, None)
             a.stop_ticker.set()
             duration = a.capture.stop()
             a.session.update(status="interrupted", duration=round(duration, 2))

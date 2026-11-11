@@ -30,19 +30,22 @@ export const api = {
     req<SessionSummary>('POST', '/sessions', body),
   stop: (id: string, speakers: number | 'auto') =>
     req<SessionSummary>('POST', `/sessions/${enc(id)}/stop`, { speakers }),
+  liveSpeakers: (id: string, speakers: number | 'auto') =>
+    req<Status>('POST', `/sessions/${enc(id)}/live-speakers`, { speakers }),
   diarize: (id: string, speakers: number | 'auto') =>
     req<SessionSummary>('POST', `/sessions/${enc(id)}/diarize`, { speakers }),
   setSpeaker: (id: string, spk: string, body: { name?: string; remember_voice?: boolean }) =>
     req<SessionDetail>('PUT', `/sessions/${enc(id)}/speakers/${enc(spk)}`, body),
   finalize: (id: string, title: string, output_folder: string) =>
     req<SessionDetail>('POST', `/sessions/${enc(id)}/finalize`, { title, output_folder: output_folder || null }),
-  improve: (id: string, engine: 'local_large' | 'cloud') =>
+  improve: (id: string, engine: 'local_large' | 'cloud' | 'cloud_diarize') =>
     req<SessionSummary>('POST', `/sessions/${enc(id)}/improve`, { engine }),
   recover: (id: string) => req<SessionSummary>('POST', `/sessions/${enc(id)}/recover`),
   deleteAudio: (id: string) => req<SessionSummary>('DELETE', `/sessions/${enc(id)}/audio`),
   deleteSession: (id: string) => req<{ deleted: string }>('DELETE', `/sessions/${enc(id)}`),
   settings: () => req<Settings>('GET', '/settings'),
   saveSettings: (body: Record<string, unknown>) => req<Settings>('PUT', '/settings', body),
+  configureShortcut: () => req<Settings['shortcut']>('POST', '/shortcut/configure'),
   vocab: () => req<Vocab>('GET', '/vocab'),
   saveVocab: (body: Vocab) => req<Vocab>('PUT', '/vocab', body),
   addRule: (wrong: string, right: string, session?: string, set?: string) =>

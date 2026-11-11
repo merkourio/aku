@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, onUnmounted, reactive, ref } from 'vue'
 import { api } from '../api'
 import { useAku } from '../store'
 import type { Rule, Settings, Voice } from '../types'
@@ -28,6 +28,18 @@ async function load() {
 }
 onMounted(load)
 
+// While the desktop's shortcut dialog is open, keep checking whether it has been answered.
+const poll = window.setInterval(async () => {
+  if (form.value?.shortcut.state !== 'binding') return
+  const s = await api.settings().catch(() => null)
+  if (s && form.value) form.value.shortcut = s.shortcut
+}, 1500)
+onUnmounted(() => window.clearInterval(poll))
+
+async function changeShortcut() {
+  await aku.run(() => api.configureShortcut())
+}
+
 function flash(text: string) {
   saved.value = text
   setTimeout(() => (saved.value = ''), 2500)
@@ -39,7 +51,7 @@ async function save(extra: Record<string, unknown> = {}) {
   const body = {
     user_name: f.user_name, output_folder: f.output_folder, backend: f.backend, local_model: f.local_model,
     improve_model: f.improve_model, cloud_model: f.cloud_model, use_gpu: f.use_gpu, diarizer: f.diarizer, language: f.language,
-    notifications: f.notifications, tray: f.tray, active_vocab_sets: f.active_vocab_sets, ...extra,
+    notifications: f.notifications, tray: f.tray, live_diarization: f.live_diarization, global_shortcut: f.global_shortcut, active_vocab_sets: f.active_vocab_sets, ...extra,
   }
   const s = await aku.run(() => api.saveSettings(body))
   if (s) {
@@ -136,6 +148,28 @@ function toggleActive(name: string, on: boolean) {
       </div>
 
       <div class="panel stack">
+        <h2 style="margin: 0">Hotkey</h2>
+        <label class="check">
+          <input v-model="form.global_shortcut" type="checkbox" @change="save()" />
+          Start and stop recording with a global shortcut
+        </label>
+        <p v-if="form.shortcut.state === 'binding'" class="small" style="color: var(--warn); margin: 0">
+          Your desktop is asking you to confirm the shortcut. Answer its dialog to finish.
+        </p>
+        <div v-else-if="form.shortcut.state === 'bound'" class="row small">
+          <span>Shortcut: <b>{{ form.shortcut.trigger || 'set in your desktop settings' }}</b></span>
+          <button @click="changeShortcut">Change…</button>
+        </div>
+        <p v-else-if="form.shortcut.state === 'unavailable'" class="small muted" style="margin: 0">
+          This desktop does not offer global shortcuts to apps. Bind the command <code>aku toggle</code> to a key in its keyboard settings instead.
+        </p>
+        <p v-else-if="form.shortcut.state === 'error'" class="small" style="color: var(--accent); margin: 0">{{ form.shortcut.error }}</p>
+        <p v-else class="muted small" style="margin: 0">
+          The key starts a recording with your last settings, or stops the running one. Your desktop shows a dialog to confirm the key the first time.
+        </p>
+      </div>
+
+      <div class="panel stack">
         <h2 style="margin: 0">Transcription</h2>
         <p v-if="!form.whisper_ready" class="small" style="color: var(--accent); margin: 0">
           whisper.cpp is not built yet. Run <code>scripts/build-whisper.sh</code>, or use the cloud backend.
@@ -200,6 +234,14 @@ function toggleActive(name: string, on: boolean) {
           </select>
           <span class="hint">In use now: {{ form.diarizer_in_use === 'pyannote' ? 'pyannote community-1' : 'built-in' }}.</span>
         </label>
+        <label class="check">
+          <input v-model="form.live_diarization" type="checkbox" @change="save()" />
+          Show speakers during the call
+        </label>
+        <p class="muted small" style="margin: -6px 0 0">
+          Uses the built-in method and some extra CPU while recording. You can set or change the number of speakers mid-call.
+          The full pass after the call still decides the final labels.
+        </p>
         <label class="field">
           Hugging Face token (for pyannote)
           <div class="row">
@@ -264,7 +306,7 @@ function toggleActive(name: string, on: boolean) {
         </div>
       </div>
 
-      <p class="muted small">Aku {{ form.version }} · hotkey: bind the command <code>aku toggle</code> to a key in your desktop's keyboard settings.</p>
+      <p class="muted small">Aku {{ form.version }}</p>
     </template>
   </div>
 </template>

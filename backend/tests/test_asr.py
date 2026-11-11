@@ -165,3 +165,49 @@ def test_openai_automatic_leaves_the_language_out():
     assert "language" not in client.calls[0] and b.last_language == "da"
     b.transcribe(np.zeros(SR * 2, dtype=np.int16), language="da")
     assert client.calls[1]["language"] == "da"
+
+
+class DiarizeClient:
+    """Fake OpenAI client for the diarizing model: answers per uploaded piece."""
+
+    def __init__(self, answers):
+        self.answers = list(answers)
+        self.calls = []
+        self.audio = self
+        self.transcriptions = self
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return R(segments=[R(**s) for s in self.answers.pop(0)])
+
+
+def test_cloud_diarize_keeps_speakers_consistent_across_pieces(tmp_path):
+    from aku.asr import cloud_diarize
+    from aku.audio import wav
+
+    path = tmp_path / "system.wav"
+    w = wav.WavWriter(path)
+    tone = (np.sin(np.arange(SR * 60) / 20) * 8000).astype(np.int16)
+    tone[SR * 29 : SR * 31] = 0  # a pause to cut at
+    w.write(tone)
+    w.close()
+    client = DiarizeClient([
+        [dict(speaker="A", start=1.0, end=9.0, text="first speaker here"), dict(speaker="B", start=10.0, end=15.0, text="and the second")],
+        [dict(speaker="spk2", start=2.0, end=6.0, text="second again"), dict(speaker="A", start=7.0, end=12.0, text="a new voice")],
+    ])
+    segs = cloud_diarize.transcribe_track(client, "gpt-4o-transcribe-diarize", path, piece_seconds=30)
+    first, second = client.calls
+    assert first["response_format"] == "diarized_json" and first["chunking_strategy"] == "auto"
+    assert "extra_body" not in first and "prompt" not in first
+    extra = second["extra_body"]
+    assert extra["known_speaker_names"] == ["spk1", "spk2"]
+    assert all(ref.startswith("data:audio/wav;base64,") for ref in extra["known_speaker_references"])
+    cut = segs[2]["start"] - 2.0  # where the second piece began
+    assert 28.5 <= cut <= 31.5  # in the pause
+    assert [(s["speaker"], s["text"]) for s in segs] == [
+        ("spk1", "first speaker here"), ("spk2", "and the second"),
+        ("spk2", "second again"),  # matched to the reference clip
+        ("spk3", "a new voice"),  # the model's "A" in piece 2 is not piece 1's "A"
+    ]
+    turns = cloud_diarize.exclusive_turns(segs + [dict(speaker="spk3", start=segs[3]["start"] + 1, end=segs[3]["end"] + 2, text="x")])
+    assert all(a["end"] <= b["start"] for a, b in zip(turns, turns[1:]))

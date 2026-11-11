@@ -56,6 +56,10 @@ class OpenAIBackend:
         text = (getattr(r, "text", "") or "").strip()
         return [] if is_non_speech(text) else spread_words(text, 0.0, duration)
 
+    @property
+    def client(self):
+        return self._client
+
     def close(self) -> None:
         pass
 

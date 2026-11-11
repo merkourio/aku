@@ -19,7 +19,6 @@ const activeSets = ref<string[]>([])
 const speakers = ref<number | 'auto'>('auto')
 const busy = ref(false)
 const ready = ref(false)
-const earlier = ref<Line[]>([]) // lines from before this page was opened
 const scroller = ref<HTMLElement | null>(null)
 
 onMounted(async () => {
@@ -42,22 +41,24 @@ const sid = computed(() => aku.status.session)
 watch(
   sid,
   async (id) => {
-    earlier.value = []
     if (id) {
       const d = await aku.run(() => api.session(id))
-      if (d) earlier.value = d.lines
+      if (d) aku.seedLive(id, d.lines)
     }
   },
   { immediate: true },
 )
 
-const lines = computed(() => {
+const lines = computed<Line[]>(() => (sid.value ? aku.liveLines(sid.value) : []))
+const live = computed(() => aku.status.live)
+
+// The count can be changed while people join: it applies to the live view straight away.
+watch(speakers, (value) => {
   const id = sid.value
-  if (!id) return []
-  const seen = new Map<number, Line>()
-  for (const l of earlier.value) seen.set(l.id, l)
-  for (const l of aku.live[id] ?? []) seen.set(l.id, l)
-  return [...seen.values()].sort((a, b) => a.start - b.start)
+  if (id && live.value?.enabled) void aku.run(() => api.liveSpeakers(id, value))
+})
+watch(sid, (id) => {
+  if (!id) speakers.value = 'auto'
 })
 
 watch(
@@ -160,10 +161,10 @@ function level(track: string): string {
           </p>
         </div>
         <div class="row">
-          <label class="field" style="flex-direction: row; align-items: center; gap: 8px">
-            Other speakers
+          <label class="field" style="flex-direction: row; align-items: center; gap: 8px" title="Change it any time, for example when someone joins">
+            Other speakers so far
             <select v-model="speakers" style="width: auto">
-              <option value="auto">Detect</option>
+              <option value="auto">Detect{{ live?.enabled && live.found ? ` (${live.found})` : '' }}</option>
               <option v-for="n in 8" :key="n" :value="n">{{ n }}</option>
             </select>
           </label>

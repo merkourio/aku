@@ -77,6 +77,23 @@ def long_run(args) -> int:
     return 0 if ok else 1
 
 
+def speaker_table(lines: list[dict], truth: list[dict], offset: float) -> tuple[dict, int, int]:
+    """Words per (label in the transcript, real speaker), and how many sit with their label's main speaker."""
+    table: dict[tuple[str, str], float] = {}
+    for line in lines:
+        best, best_o = None, 0.0
+        for t in truth:
+            o = min(line["end"] + offset, t["end"]) - max(line["start"] + offset, t["start"])
+            if o > best_o:
+                best, best_o = t["speaker"], o
+        if best:
+            key = (line["speaker"], best)
+            table[key] = table.get(key, 0) + len(line["text"].split())
+    total = int(sum(table.values()))
+    pure = int(sum(max(v for (i, _), v in table.items() if i == label) for label in {k[0] for k in table}))
+    return table, pure, total
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--seconds", type=float, default=275)
@@ -118,9 +135,42 @@ def main() -> int:
             # only the player on the "call" device counts as the app; the mic player is on another device
             print("note: app scope captures every pw-play stream, including the simulated mic")
         started = time.monotonic()
+        relabels = []
+        manager.bus.subscribe(lambda e: e["type"] == "relabel" and relabels.append(e))
         s = manager.start(sources, backend=args.backend)
         sid = s["id"]
-        time.sleep(args.seconds)
+        truth_all = json.loads((ROOT / "call_truth.json").read_text())
+
+        # --- live speaker separation: labels during the call, and changing the count mid-call ---
+        def live_state(label: str, want_found: int | None = None) -> None:
+            nonlocal ok
+            time.sleep(6)  # let the latest chunk be transcribed and labelled
+            now = time.monotonic() - started
+            lines = manager.detail(sid)["lines"]
+            truth = [t for t in truth_all if t["end"] < now - 8]
+            lines = [l for l in lines if l["end"] + 0.3 < now - 8]
+            table, pure, total = speaker_table(lines, truth, 0.3)
+            found = manager.status()["live"]["found"]
+            real = len({t["speaker"] for t in truth if t["speaker"] != "me"})
+            # forcing fewer speakers than there are must merge voices, so only the count is checked then
+            accurate = pure / max(1, total) > 0.93 or (want_found or real) < real
+            good = total > 0 and accurate and found == (want_found or real)
+            ok &= good
+            print(f"  LIVE {label} at {now:.0f}s: {found} speakers shown (really {real}), {pure}/{total} words with the right speaker"
+                  f" = {pure / max(1, total):.0%}  {'OK' if good else 'FAIL'}", flush=True)
+
+        if args.seconds >= 200:
+            time.sleep(70)
+            live_state("automatic count")
+            manager.set_live_speakers(sid, 2)
+            live_state("after setting 2 speakers", want_found=2)
+            manager.set_live_speakers(sid, 3)
+            live_state("after raising it to 3", want_found=3)
+            manager.set_live_speakers(sid, "auto")
+            time.sleep(max(0, args.seconds - (time.monotonic() - started) - 8))
+            live_state("automatic again, end of call")
+            print(f"  LIVE {len(relabels)} relabel events during the call")
+        time.sleep(max(0, args.seconds - (time.monotonic() - started)))
         manager.stop(sid, speakers=args.speakers)
         stopped = time.monotonic()
         manager.wait(sid)
@@ -137,19 +187,8 @@ def main() -> int:
         truth = json.loads((ROOT / "call_truth.json").read_text())
         truth = [t for t in truth if t["start"] < args.seconds - 2]
         offset = 0.3  # players started this long before the recording
-        table: dict[tuple[str, str], float] = {}
-        for line in d["lines"]:
-            best, best_o = None, 0.0
-            for t in truth:
-                o = min(line["end"] + offset, t["end"]) - max(line["start"] + offset, t["start"])
-                if o > best_o:
-                    best, best_o = t["speaker"], o
-            if best:
-                key = (line["speaker"], best)
-                table[key] = table.get(key, 0) + len(line["text"].split())
+        table, pure, total = speaker_table(d["lines"], truth, offset)
         ids = sorted({k[0] for k in table})
-        total = sum(table.values())
-        pure = sum(max(v for (i, _), v in table.items() if i == sid_) for sid_ in ids)
         print("speakers found:", [f"{s['id']} ({s['duration']}s)" for s in d["speakers"]])
         for i in ids:
             print("  ", i, {t: v for (j, t), v in sorted(table.items()) if j == i})

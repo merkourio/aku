@@ -54,10 +54,17 @@ try {
 
   await page.waitForFunction(() => document.querySelectorAll('.line').length >= 6, null, { timeout: 90_000 })
   const names = await page.locator('.line .who').allTextContents()
-  check('live transcript shows both sides', names.some((n) => n.startsWith('Them')) && names.some((n) => !n.startsWith('Them')), names.slice(0, 6).join(' '))
+  const other = (n) => n.startsWith('Them') || n.startsWith('Speaker')
+  check('live transcript shows both sides', names.some(other) && names.some((n) => !other(n)), names.slice(0, 6).join(' '))
+  // live speaker separation: "Them" turns into numbered speakers while the call is still running
+  await page.waitForFunction(() => new Set([...document.querySelectorAll('.line .who')].map((e) => e.textContent).filter((t) => t.startsWith('Speaker'))).size >= 2, null, { timeout: 90_000 })
+  const liveNames = [...new Set(await page.locator('.line .who').allTextContents())].sort()
+  check('speakers are told apart during the call', true, liveNames.join(' '))
   await shot('2-live')
 
-  await page.locator('select').last().selectOption('3')
+  await page.getByLabel('Other speakers so far').selectOption('3')
+  await page.waitForFunction(async () => (await (await fetch('/status')).json()).live?.speakers === 3)
+  check('speaker count can be set during the call', true)
   await page.getByRole('button', { name: /Stop/ }).click()
   await page.getByRole('heading', { name: 'Who was on the call?' }).waitFor({ timeout: 120_000 })
   const inputs = page.locator('input[aria-label^="Name for"]')
@@ -116,6 +123,9 @@ try {
 
   await page.goto(base + '/#/settings')
   await page.getByRole('heading', { name: 'Saved voices' }).waitFor()
+  check('settings offer the global shortcut and live speakers',
+    (await page.getByLabel('Start and stop recording with a global shortcut').count()) === 1 &&
+    (await page.getByLabel('Show speakers during the call').isChecked()))
   await page.getByText('Anna Test').waitFor()
   check('remembered voice is listed in Settings', true)
   await shot('7-settings')

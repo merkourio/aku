@@ -18,7 +18,7 @@ const names = reactive<Record<string, string>>({})
 const title = ref('')
 const folder = ref('')
 const count = ref<number | 'auto'>('auto')
-const engine = ref<'local_large' | 'cloud'>('local_large')
+const engine = ref<'local_large' | 'cloud' | 'cloud_diarize'>('local_large')
 const confirm = ref<null | 'audio' | 'session'>(null)
 const working = ref(false)
 const player = new Audio()
@@ -31,6 +31,7 @@ async function load() {
     const d = await api.session(props.id)
     detail.value = d
     missing.value = false
+    if (d.status === 'recording' || d.status === 'processing') aku.seedLive(props.id, d.lines)
     for (const s of d.speakers) {
       // keep what the user is typing; otherwise show the saved or suggested name
       if (!(s.id in names) || names[s.id] === '') names[s.id] = s.name ?? s.suggested ?? ''
@@ -59,10 +60,9 @@ const lines = computed<Line[]>(() => {
   const d = detail.value
   if (!d) return []
   if (ready.value) return d.lines
-  const seen = new Map<number, Line>()
-  for (const l of d.lines) seen.set(l.id, l)
-  for (const l of aku.live[props.id] ?? []) seen.set(l.id, l)
-  return [...seen.values()].sort((a, b) => a.start - b.start)
+  // still recording or finishing: what the live view has, else what the server saved
+  const live = aku.liveLines(props.id)
+  return live.length ? live : d.lines
 })
 
 function play(key: string, url: string) {
@@ -268,10 +268,16 @@ async function saveFix() {
           <select v-model="engine" style="width: auto" :disabled="!detail.has_audio">
             <option value="local_large">Larger local model ({{ aku.settings?.improve_model ?? 'large-v3' }})</option>
             <option value="cloud">OpenAI cloud</option>
+            <option value="cloud_diarize">OpenAI cloud with its own speaker labels</option>
           </select>
           <button :disabled="!detail.has_audio || !!job || aku.status.recording" @click="improve">Improve transcript</button>
           <span class="small muted">Re-transcribes the whole recording and keeps the speaker names. The current version is kept as a backup.</span>
         </div>
+        <p v-if="engine === 'cloud_diarize'" class="small muted" style="margin: 0">
+          Uploads the whole recording of the other side to OpenAI ({{ aku.settings?.cloud_diarize_model }}), which also decides who said what.
+          Names you gave are carried over. OpenAI retires this model on 26 Feb 2027.
+        </p>
+        <p v-else-if="engine === 'cloud'" class="small muted" style="margin: 0">Sends the audio to OpenAI in short chunks; speakers stay as they are.</p>
         <div class="row">
           <button class="danger" :disabled="!detail.has_audio || !!job" @click="confirm = 'audio'">Delete audio, keep transcript</button>
           <button class="danger" :disabled="!!job || isRecording" @click="confirm = 'session'">Delete this session</button>

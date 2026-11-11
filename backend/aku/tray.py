@@ -208,13 +208,7 @@ class Tray:
             timer.start()
 
     def _toggle(self) -> None:
-        try:
-            self.manager.toggle()
-        except Exception as e:  # noqa: BLE001 - e.g. no API key for the cloud backend
-            self.manager.bus.emit("error", session=None, message=str(e))
-            from .events import notify
-
-            notify("Aku could not start recording", str(e))
+        self.manager.toggle_safely()
 
     def refresh(self, recording: bool) -> None:
         if recording == self.recording:

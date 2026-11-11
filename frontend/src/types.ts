@@ -37,6 +37,7 @@ export interface Status {
   pending: number
   capture_errors: Record<string, string>
   mic_silent?: boolean
+  live?: { enabled: boolean; speakers: number | 'auto'; found: number } | null
   jobs: Record<string, JobInfo>
   download?: { model: string; progress: number } | null
 }
@@ -60,6 +61,7 @@ export interface SessionSummary {
 
 export interface Line {
   id: number
+  segment?: number
   start: number
   end: number
   speaker: string
@@ -97,9 +99,13 @@ export interface Settings {
   local_model: string
   improve_model: string
   cloud_model: string
+  cloud_diarize_model: string
   use_gpu: boolean
   language: string
   diarizer: 'auto' | 'pyannote' | 'basic'
+  live_diarization: boolean
+  global_shortcut: boolean
+  shortcut: { state: 'off' | 'binding' | 'bound' | 'unavailable' | 'error'; trigger: string | null; error: string | null }
   port: number
   notifications: boolean
   tray: boolean
@@ -138,7 +144,8 @@ export interface Voice {
 
 export type LiveEvent =
   | ({ type: 'status' } & Status)
-  | { type: 'segment'; session: string; segment: Line & { lag: number | null } }
+  | { type: 'segment'; session: string; segment: Line & { lag: number | null }; lines?: Line[] }
+  | { type: 'relabel'; session: string; segment: number; lines: Line[] }
   | { type: 'session'; session: Partial<SessionSummary> & { id: string; deleted?: boolean } }
   | { type: 'diarization_progress'; session: string; progress: number; step: string }
   | { type: 'error'; session: string | null; message: string }

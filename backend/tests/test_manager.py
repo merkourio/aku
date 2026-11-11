@@ -167,3 +167,39 @@ def test_speaker_count_and_sources_validation():
     with pytest.raises(Invalid):
         normalise_sources({"scope": "apps", "apps": []})
     assert normalise_sources({"scope": "apps", "apps": ["teams-for-linux"]})["apps"] == ["teams-for-linux"]
+
+
+def test_improve_with_cloud_speaker_labels_carries_names_over(monkeypatch):
+    m = Manager()
+    s = make_session()
+    m.set_speaker(s.id, "S2", "Bo")  # S2 spoke 2-4 s in the local separation
+
+    class Cloud:
+        name, model, client = "openai:whisper-1", "whisper-1", object()
+        def close(self): pass
+
+    def fake_transcribe_file(path, track, backend, on_segment, prompt=None, language="en", **kw):
+        assert track == "mic"  # the other side is not sent in chunks
+        on_segment(seg("mic", 5.0, "my reply"))
+        return 1
+
+    def fake_track(client, model, wav_path, progress=None, **kw):
+        assert model == "gpt-4o-transcribe-diarize" and wav_path == s.system
+        return [
+            {"start": 0.0, "end": 2.0, "speaker": "spk1", "text": "hello from ExampleCo"},
+            {"start": 2.0, "end": 4.0, "speaker": "spk2", "text": "three four five six"},
+            {"start": 10.0, "end": 11.0, "speaker": "spk1", "text": "back again"},
+        ]
+
+    monkeypatch.setattr(m, "make_backend", lambda *a, **k: Cloud())
+    monkeypatch.setattr("aku.sessions.manager.transcribe_file", fake_transcribe_file)
+    monkeypatch.setattr("aku.sessions.manager.cloud_diarize.transcribe_track", fake_track)
+    monkeypatch.setattr(m, "_voice_embeddings", lambda path, turns: {t["speaker"]: [0.0, 1.0] for t in turns})
+    m.improve(s.id, "cloud_diarize")
+    m.wait(s.id)
+    d = m.detail(s.id)
+    assert d["error"] is None and d["improved_with"] == "openai:whisper-1 + gpt-4o-transcribe-diarize"
+    assert d["diarizer"] == "openai"
+    assert [(l["name"], l["text"]) for l in d["lines"]] == [
+        ("Speaker 1", "hello from ExampleCo"), ("Bo", "three four five six"), ("Taylor", "my reply"), ("Speaker 1", "back again")]
+    assert (s.dir / "diarization.prev.json").exists() and (s.dir / "transcript.prev.json").exists()

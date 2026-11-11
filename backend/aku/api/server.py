@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from .. import __version__, config
 from ..diarize import choose_engine, voiceprints
 from ..sessions.manager import Busy, Invalid, Manager, NotFound, parse_language
+from ..shortcuts import GlobalShortcut, PortalError
 from ..vocab import store as vocab
 from .security import LocalOnly
 
@@ -78,6 +79,8 @@ def create_app(manager: Manager | None = None, port: int | None = None, tray: bo
     port = port or config.load_settings()["port"]
     manager = manager or Manager()
     clients: set[asyncio.Queue] = set()
+    shortcut = GlobalShortcut(lambda: None)
+    state: dict = {"loop": None}
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -94,6 +97,12 @@ def create_app(manager: Manager | None = None, port: int | None = None, tray: bo
                 loop.call_soon_threadsafe(put)
 
         unsubscribe = manager.bus.subscribe(forward)
+        state["loop"] = loop
+        settings = config.load_settings()
+        shortcut.trigger = settings["shortcut_trigger"]
+        shortcut.on_activate = lambda: loop.run_in_executor(None, manager.toggle_safely)
+        if settings["global_shortcut"]:
+            shortcut.enable()
         tray_task = None
         if tray:
             from ..tray import run_tray
@@ -103,6 +112,7 @@ def create_app(manager: Manager | None = None, port: int | None = None, tray: bo
             yield
         finally:
             unsubscribe()
+            await shortcut.disable()
             if tray_task:
                 tray_task.cancel()
             await asyncio.to_thread(manager.shutdown)
@@ -163,6 +173,10 @@ def create_app(manager: Manager | None = None, port: int | None = None, tray: bo
     def stop(sid: str, body: SpeakersBody | None = None):
         return manager.stop(sid, body.speakers if body else "auto")
 
+    @app.post("/sessions/{sid}/live-speakers")
+    def live_speakers(sid: str, body: SpeakersBody):
+        return manager.set_live_speakers(sid, body.speakers)
+
     @app.post("/sessions/{sid}/diarize")
     def rediarize(sid: str, body: SpeakersBody | None = None):
         return manager.rediarize(sid, body.speakers if body else "auto")
@@ -207,9 +221,25 @@ def create_app(manager: Manager | None = None, port: int | None = None, tray: bo
 
     # -- settings ---------------------------------------------------------------------
 
+    def on_loop(coro, timeout: float = 10):
+        """Run a coroutine on the service's event loop from a request thread."""
+        return asyncio.run_coroutine_threadsafe(coro, state["loop"]).result(timeout)
+
+    def with_shortcut(view: dict) -> dict:
+        view["shortcut"] = dict(shortcut.status)
+        return view
+
     @app.get("/settings")
     def get_settings():
-        return settings_view()
+        return with_shortcut(settings_view())
+
+    @app.post("/shortcut/configure")
+    def configure_shortcut():
+        try:
+            on_loop(shortcut.configure())
+        except PortalError as e:
+            raise Invalid(str(e)) from e
+        return dict(shortcut.status)
 
     @app.put("/settings")
     def put_settings(body: dict):
@@ -231,7 +261,13 @@ def create_app(manager: Manager | None = None, port: int | None = None, tray: bo
                 raise Invalid("The output folder must be a full path.")
             body["output_folder"] = str(folder)
         config.save_settings(body)
-        return settings_view()
+        if "global_shortcut" in body and state["loop"]:
+            async def apply() -> None:
+                await shortcut.disable()
+                if body["global_shortcut"]:
+                    shortcut.enable()
+            on_loop(apply())
+        return with_shortcut(settings_view())
 
     # -- vocabulary ----------------------------------------------------------------------
 
@@ -273,7 +309,15 @@ def create_app(manager: Manager | None = None, port: int | None = None, tray: bo
         try:
             await ws.send_json({"type": "status", **manager.status()})
             while True:
-                await ws.send_json(await q.get())
+                try:
+                    event = await asyncio.wait_for(q.get(), 1.0)
+                except asyncio.TimeoutError:
+                    # Aku is quitting: let go of the browser tab, or shutdown would wait for it
+                    if getattr(getattr(app.state, "server", None), "should_exit", False):
+                        await ws.close(code=1001)
+                        break
+                    continue
+                await ws.send_json(event)
         except (WebSocketDisconnect, RuntimeError):
             pass
         finally:
