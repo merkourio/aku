@@ -183,8 +183,18 @@ def run_basic(audio: np.ndarray, speakers: int | None, token: str | None) -> dic
     for c in sorted(set(labels[ridx])) if len(ridx) else [0]:
         v = unit[ridx][labels[ridx] == c].mean(axis=0) if len(ridx) else unit.mean(axis=0)
         centroids[c] = v / max(np.linalg.norm(v), 1e-9)
+    # Short windows give noisy embeddings. A short phrase right next to a longer one
+    # ("...here? he asked.") almost always belongs to the same speaker: follow the neighbour.
     for i in np.flatnonzero(~reliable):
-        if good[i]:
+        _, a, b = windows[i]
+        near, near_gap = None, int(1.0 * SR)
+        for j in ridx:
+            gap = max(windows[j][1] - b, a - windows[j][2], 0)
+            if gap < near_gap:
+                near, near_gap = j, gap
+        if near is not None:
+            labels[i] = labels[near]
+        elif good[i]:
             labels[i] = max(centroids, key=lambda c: float(unit[i] @ centroids[c]))
         else:
             labels[i] = -1

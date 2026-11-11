@@ -119,7 +119,7 @@ def list_devices(graph: Graph | None = None) -> dict:
     for n in g.nodes.values():
         if n.name.startswith(OWN_PREFIX):
             continue
-        if n.media_class == "Audio/Source":
+        if n.media_class.startswith("Audio/Source"):  # includes virtual mics
             inputs.append({"name": n.name, "description": n.description, "default": n.name == g.default_source})
         elif n.media_class == "Audio/Sink":
             outputs.append({"name": n.name, "description": n.description, "default": n.name == g.default_sink})

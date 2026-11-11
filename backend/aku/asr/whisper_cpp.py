@@ -69,7 +69,9 @@ class WhisperCpp:
             if not self.use_gpu:
                 cmd.append("-ng")
             self._log = config.data_dir() / f"whisper-server-{self.port}.log"
-            self._proc = subprocess.Popen(cmd, stdout=open(self._log, "wb"), stderr=subprocess.STDOUT)
+            self._proc = subprocess.Popen(
+                cmd, stdout=open(self._log, "wb"), stderr=subprocess.STDOUT, preexec_fn=config.die_with_parent
+            )
             self._client = httpx.Client(base_url=f"http://127.0.0.1:{self.port}", timeout=300)
             deadline = time.monotonic() + 180
             while time.monotonic() < deadline:

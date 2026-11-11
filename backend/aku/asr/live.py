@@ -58,7 +58,7 @@ class Segment:
         )
 
 
-def segment_from(chunk: Chunk, words: list[Word], backend_name: str) -> Segment | None:
+def segment_from(chunk: Chunk, words: list[Word], backend_name: str, prompt: str = "") -> Segment | None:
     """Place a chunk's words on the session timeline; keep only the chunk's own share."""
     lo = chunk.valid_start if chunk.valid_start > chunk.start_s + 1e-6 else float("-inf")
     hi = chunk.valid_end if chunk.valid_end < chunk.end_s - 1e-6 else float("inf")
@@ -70,7 +70,7 @@ def segment_from(chunk: Chunk, words: list[Word], backend_name: str) -> Segment 
     if not kept:
         return None
     text = " ".join(w.text for w in kept)
-    if looks_hallucinated(text, chunk.speech_seconds):
+    if looks_hallucinated(text, chunk.speech_seconds, prompt):
         return None
     return Segment(
         track=chunk.track, start=kept[0].start, end=kept[-1].end, text=text, words=kept,
@@ -116,8 +116,9 @@ class Transcriber:
         last: Exception | None = None
         for _ in range(2):  # one retry: the local server restarts itself if it died
             try:
-                words = self.backend.transcribe(chunk.audio, self.prompt(), self.language)
-                return segment_from(chunk, words, self.backend.name)
+                prompt = self.prompt()
+                words = self.backend.transcribe(chunk.audio, prompt, self.language)
+                return segment_from(chunk, words, self.backend.name, prompt)
             except Exception as e:  # noqa: BLE001 - any backend failure is reported, not fatal
                 last = e
                 time.sleep(0.5)
@@ -168,7 +169,7 @@ def transcribe_file(
         except Exception as e:  # noqa: BLE001
             errors(f"Transcription failed for {chunk.start_s:.0f}s-{chunk.end_s:.0f}s ({track}): {e}")
             return
-        seg = segment_from(chunk, words, backend.name)
+        seg = segment_from(chunk, words, backend.name, prompt)
         if seg is not None:
             count += 1
             on_segment(seg)

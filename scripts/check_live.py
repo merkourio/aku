@@ -30,6 +30,53 @@ def null_sink(name: str) -> str:
     ).stdout.strip()
 
 
+def long_run(args) -> int:
+    """M2 acceptance: 10 minutes, lag under target, no words lost or doubled at chunk edges."""
+    import re
+    from collections import Counter
+
+    tmp = Path(tempfile.mkdtemp(prefix="aku-check-"))
+    os.environ.update(AKU_SESSIONS_DIR=str(tmp / "sessions"), AKU_DB=str(tmp / "aku.db"), AKU_CONFIG_DIR=str(tmp / "config"))
+    from aku import config
+    from aku.sessions.manager import Manager
+
+    config.save_settings({"notifications": False})
+    mods = [null_sink(OUT), null_sink(MIC)]
+    player = None
+    try:
+        manager = Manager()
+        manager.bus.subscribe(lambda e: e["type"] == "error" and print("  ERROR:", e["message"], flush=True))
+        player = subprocess.Popen(["pw-play", "--target", OUT, str(ROOT / "bench10.wav")], stderr=subprocess.DEVNULL)
+        sid = manager.start({"input": MIC, "output": OUT, "scope": "all", "apps": []}, backend=args.backend)["id"]
+        time.sleep(603)
+        manager.stop(sid, speakers="auto")
+        manager.wait(sid)
+        session = manager.session(sid)
+        meta, segs = session.meta, session.segments()
+        lag = meta.get("lag") or {}
+        lag_ok = bool(lag) and lag["median"] < 10 and lag["max"] < 25
+        norm = lambda t: re.sub(r"[^a-z' ]", " ", t.lower()).split()
+        ref = norm((ROOT / "bench10.txt").read_text())
+        hyp = [w for s in sorted(segs, key=lambda s: s.start) for w in norm(s.text)]
+        longest = max(s.chunk_end - s.chunk_start for s in segs)
+        # words the transcript has too many or too few of, compared with the reference text
+        extra = sum((Counter(hyp) - Counter(ref)).values())
+        lost = sum((Counter(ref) - Counter(hyp)).values())
+        words_ok = abs(len(hyp) - len(ref)) / len(ref) < 0.02 and lost / len(ref) < 0.06
+        print(f"recorded {meta['duration']:.0f}s, {len(segs)} segments, longest chunk {longest:.1f}s")
+        print(f"lag: median {lag.get('median')}s, max {lag.get('max')}s  {'OK' if lag_ok else 'FAIL'} (target <10 / <25)")
+        print(f"words: transcript {len(hyp)}, reference {len(ref)}; {lost} reference words missing or heard differently,"
+              f" {extra} extra  {'OK' if words_ok else 'FAIL'}")
+        ok = lag_ok and words_ok and longest <= 12.6
+    finally:
+        if player:
+            player.terminate()
+        for m in mods:
+            subprocess.run(["pactl", "unload-module", m])
+    print("\nRESULT:", "PASS" if ok else "FAIL")
+    return 0 if ok else 1
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--seconds", type=float, default=275)
@@ -37,7 +84,10 @@ def main() -> int:
     ap.add_argument("--backend", default="local")
     ap.add_argument("--speakers", default="3")
     ap.add_argument("--keep", action="store_true", help="keep the session folder and print its path")
+    ap.add_argument("--long", action="store_true", help="10 minutes of back-to-back speech: lag and chunk-edge check only")
     args = ap.parse_args()
+    if args.long:
+        return long_run(args)
 
     tmp = Path(tempfile.mkdtemp(prefix="aku-check-"))
     os.environ["AKU_SESSIONS_DIR"] = str(tmp / "sessions")

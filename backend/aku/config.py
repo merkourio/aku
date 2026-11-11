@@ -182,3 +182,14 @@ def ensure_vad_model() -> Path:
     if not p.exists():
         download(VAD_URL, p)
     return p
+
+
+def die_with_parent() -> None:
+    """preexec_fn for helper processes: if Aku is killed, they are stopped too (no orphans)."""
+    import ctypes
+    import signal
+
+    try:
+        ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG
+    except OSError:
+        pass

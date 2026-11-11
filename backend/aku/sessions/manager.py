@@ -46,6 +46,7 @@ class Active:
     user_name: str
     next_id: int = 1
     stop_ticker: threading.Event = field(default_factory=threading.Event)
+    mic_quiet: float = 0.0  # seconds of pure digital silence on the mic (hardware mute?)
 
 
 @dataclass
@@ -85,6 +86,7 @@ class Manager:
         self.bus = bus or EventBus()
         self.active: Active | None = None
         self.jobs: dict[str, Job] = {}
+        self.download: dict | None = None
         self._lock = threading.RLock()
         self._heavy = threading.Lock()  # one GPU/CPU-heavy job at a time
         config.ensure_dirs()
@@ -116,8 +118,8 @@ class Manager:
         from ..asr.whisper_cpp import WhisperCpp
 
         def progress(done: int, total: int) -> None:
-            if total:
-                self.bus.emit("status", **self.status(), download={"model": name, "progress": done / total})
+            # a first-time model download: shown in the UI until it completes
+            self.download = {"model": name, "progress": round(done / total, 3)} if total and done < total else None
 
         name = model or settings["local_model"]
         return WhisperCpp(name, settings["whisper_port"] + port_offset, settings["use_gpu"], on_progress=progress)
@@ -136,6 +138,8 @@ class Manager:
             "levels": {n: round(t.level, 3) for n, t in a.capture.tracks.items()} if a else {},
             "pending": a.transcriber.pending if a else 0,
             "capture_errors": a.capture.errors() if a else {},
+            "mic_silent": bool(a and a.mic_quiet >= 8),
+            "download": self.download,
             "jobs": {sid: {"kind": j.kind, "step": j.step, "progress": j.progress} for sid, j in self.jobs.items()},
         }
         return out
@@ -252,6 +256,8 @@ class Manager:
 
     def _ticker(self, active: Active) -> None:
         while not active.stop_ticker.wait(0.5):
+            # a muted microphone delivers exact zeros; a live one always has some noise
+            active.mic_quiet = active.mic_quiet + 0.5 if active.capture.mic.level == 0.0 else 0.0
             self.bus.emit("status", **self.status())
 
     def _on_segment(self, sid: str, seg: Segment) -> None:
@@ -497,8 +503,9 @@ class Manager:
             done = 0
             errors: list[str] = []
             try:
-                self._step(job, "Loading model", 0.0)
+                self._step(job, "Loading model")
                 if hasattr(backend, "start"):
+                    backend.on_progress = lambda got, size: self._step(job, f"Downloading model {backend.model}", got / size if size else None)
                     backend.start()
                 for track in ("mic", "system"):
                     size = wav.frames(session.track(track))

@@ -43,7 +43,9 @@ def run(
     ]
     log = Path(out_path).with_name("diarize.log")
     with open(log, "w") as errors:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=errors, text=True, env=env)
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=errors, text=True, env=env, preexec_fn=config.die_with_parent
+        )
     error = None
     for line in proc.stdout:
         try:

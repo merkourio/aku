@@ -44,8 +44,11 @@ def is_non_speech(text: str) -> bool:
     return bool(_NON_SPEECH.match(text)) or not text.strip()
 
 
-def looks_hallucinated(text: str, speech_seconds: float) -> bool:
-    return speech_seconds < 0.6 and text.strip().lower() in _SILENCE_PHRASES
+def looks_hallucinated(text: str, speech_seconds: float, prompt: str = "") -> bool:
+    t = text.strip().lower()
+    if prompt and t and t in prompt.lower() and len(t) > 12:
+        return True  # Whisper echoing its own prompt
+    return speech_seconds < 0.6 and t in _SILENCE_PHRASES
 
 
 def tokens_to_words(tokens: list[tuple[float, float, str]]) -> list[Word]:

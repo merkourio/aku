@@ -20,7 +20,7 @@ from typing import Callable
 
 import numpy as np
 
-from ..config import SAMPLE_RATE
+from ..config import SAMPLE_RATE, die_with_parent
 from . import pipewire
 from .wav import WavWriter
 
@@ -159,7 +159,8 @@ class PwStream(threading.Thread):
         while not self._stop_flag.is_set():
             try:
                 self._proc = subprocess.Popen(
-                    self.command(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0
+                    self.command(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0,
+                    preexec_fn=die_with_parent,
                 )
             except OSError as e:
                 self.error = f"cannot start pw-record: {e}"

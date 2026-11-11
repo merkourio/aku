@@ -86,6 +86,24 @@ def cmd_status(args) -> None:
 
 
 def cmd_open(args) -> None:
+    """Open the UI; start the background service first if it is installed but not running."""
+    import httpx
+
+    def up() -> bool:
+        try:
+            httpx.get(base_url() + "/status", timeout=1)
+            return True
+        except httpx.HTTPError:
+            return False
+
+    if not up():
+        subprocess.run(["systemctl", "--user", "start", "aku.service"], capture_output=True)
+        for _ in range(40):
+            if up():
+                break
+            time.sleep(0.25)
+        else:
+            sys.exit("Aku is not running. Start it with:  aku serve")
     subprocess.Popen(["xdg-open", base_url() + "/"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 

@@ -9,6 +9,8 @@ from .. import db
 
 PROMPT_CHARS = 700  # ~224 Whisper tokens is the hard limit; stay under it
 DEFAULT_SET = "General"
+# Without any prompt Whisper drops punctuation and capitals on some chunks; a neutral one fixes most.
+STYLE_PROMPT = "Hello. Okay, so here is what I think."
 
 
 def list_sets() -> list[dict]:
@@ -83,7 +85,7 @@ def build_prompt(active_sets: list[str], names: list[str] | None = None) -> str:
             break
         out.append(t)
         size += len(t) + 2
-    return "Glossary: " + ", ".join(out) + "." if out else ""
+    return "Glossary: " + ", ".join(out) + "." if out else STYLE_PROMPT
 
 
 def compile_rules(rules: list[dict] | None = None) -> list[tuple[re.Pattern, str]]:

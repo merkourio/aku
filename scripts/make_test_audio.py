@@ -1,7 +1,7 @@
 """Build test recordings from Mini LibriSpeech (public domain audiobooks, CC BY 4.0 corpus).
 
 Creates in ~/.cache/aku-test:
-  bench10.wav          10 minutes of continuous speech (benchmark)
+  bench10.wav          10 minutes of continuous speech (benchmark), bench10.txt its text
   call_system.wav      a 3-speaker "call" (the other side)
   call_mic.wav         a 4th speaker on the same timeline (me)
   call_truth.json      who said what, when
@@ -59,17 +59,20 @@ def main() -> None:
     speakers = sorted(utts, key=lambda s: -len(utts[s]))
 
     # benchmark: 10 minutes, speakers back to back
-    parts, total = [], 0
+    parts, texts, total = [], [], 0
     for spk in speakers:
-        for path, _ in utts[spk][:12]:
+        for path, text in utts[spk][:12]:
             a = load(path)
+            if total + len(a) > 600 * SR:
+                break  # whole utterances only, so the reference text matches the audio
             parts.append(a)
+            texts.append(text)
             total += len(a)
-            if total >= 600 * SR:
-                break
-        if total >= 600 * SR:
+        if total >= 590 * SR:
             break
-    sf.write(ROOT / "bench10.wav", np.concatenate(parts)[: 600 * SR], SR)
+    parts.append(np.zeros(600 * SR - total, dtype=np.int16))
+    sf.write(ROOT / "bench10.wav", np.concatenate(parts), SR)
+    (ROOT / "bench10.txt").write_text("\n".join(texts))
 
     # a call: A, B, C on the system track, D on the mic track
     them = speakers[20:23]
