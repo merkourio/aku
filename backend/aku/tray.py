@@ -12,6 +12,7 @@ import asyncio
 import os
 import signal as os_signal
 import subprocess
+import threading
 
 from dbus_fast import PropertyAccess, Variant
 from dbus_fast.aio import MessageBus
@@ -201,6 +202,10 @@ class Tray:
             subprocess.Popen(["xdg-open", self.url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         elif item == QUIT:
             os.kill(os.getpid(), os_signal.SIGINT)
+            # safety net: if a clean shutdown stalls, leave anyway (audio on disk stays recoverable)
+            timer = threading.Timer(10, lambda: os._exit(0))
+            timer.daemon = True
+            timer.start()
 
     def _toggle(self) -> None:
         try:

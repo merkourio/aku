@@ -49,7 +49,8 @@ def cmd_serve(args) -> None:
     print(f"Aku is running at http://127.0.0.1:{port}/  (Ctrl+C to quit)")
     if args.open:
         subprocess.Popen(["xdg-open", f"http://127.0.0.1:{port}/"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+    # An open browser tab keeps a WebSocket alive; without a limit, quitting would wait for it forever.
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning", timeout_graceful_shutdown=3)
 
 
 def cmd_toggle(args) -> None:
@@ -97,12 +98,16 @@ def cmd_open(args) -> None:
             return False
 
     if not up():
-        subprocess.run(["systemctl", "--user", "start", "aku.service"], capture_output=True)
-        for _ in range(40):
+        # restart, not start: also rescues a service that is alive but no longer answering
+        subprocess.run(["systemctl", "--user", "restart", "aku.service"], capture_output=True)
+        for _ in range(60):
             if up():
                 break
             time.sleep(0.25)
         else:
+            from .events import notify
+
+            notify("Aku could not start", "Run `aku doctor` in a terminal to see what is missing.")
             sys.exit("Aku is not running. Start it with:  aku serve")
     subprocess.Popen(["xdg-open", base_url() + "/"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
