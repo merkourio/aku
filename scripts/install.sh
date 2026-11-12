@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Install Aku for your user: the `aku` command, a background service that starts
-# when you log in (tray icon + browser UI), and an "Aku" entry in the app launcher.
-# No sudo. Run again after updating the code.
+# Install Aku from this source folder (for development): builds the UI and whisper.cpp here.
+# To install a released version instead, see "Install" in README.md (scripts/get-aku.sh).
+# Sets up the `aku` command, a background service that starts when you log in (tray icon +
+# browser UI), and an "Aku" entry in the app launcher. No sudo. Run again after changing the code.
 #
 #   bash scripts/install.sh            install or update (refuses while Aku is recording)
 #   bash scripts/install.sh --force    update even if that interrupts a recording
@@ -9,14 +10,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-UNIT="$HOME/.config/systemd/user/aku.service"
-DESKTOP="$HOME/.local/share/applications/aku.desktop"
-ICON="$HOME/.local/share/icons/hicolor/scalable/apps/aku.svg"
-
 if [ "${1:-}" = "--remove" ]; then
-  systemctl --user disable --now aku.service 2>/dev/null || true
-  rm -f "$UNIT" "$DESKTOP" "$ICON"
-  systemctl --user daemon-reload
+  [ -x "$HOME/.local/bin/aku" ] && "$HOME/.local/bin/aku" setup --remove || true
   uv tool uninstall aku-transcribe 2>/dev/null || true
   echo "Removed. Your recordings and settings are still in ~/.local/share/aku and ~/.config/aku."
   exit 0
@@ -57,35 +52,7 @@ echo "== Installing the aku command"
 uv tool install --force --python 3.12 ./backend
 
 echo "== Service, launcher entry"
-mkdir -p "$(dirname "$UNIT")" "$(dirname "$DESKTOP")" "$(dirname "$ICON")"
-cp frontend/public/favicon.svg "$ICON"
-cat > "$UNIT" <<EOF
-[Unit]
-Description=Aku call transcriber
-After=graphical-session.target
-PartOf=graphical-session.target
-
-[Service]
-ExecStart=$HOME/.local/bin/aku serve
-Restart=on-failure
-RestartSec=3
-
-[Install]
-WantedBy=graphical-session.target
-EOF
-cat > "$DESKTOP" <<EOF
-[Desktop Entry]
-Type=Application
-Name=Aku
-Comment=Record and transcribe calls locally
-Exec=$HOME/.local/bin/aku open
-Icon=aku
-Categories=AudioVideo;Audio;Utility;
-Terminal=false
-EOF
-systemctl --user daemon-reload
-systemctl --user enable aku.service
-systemctl --user restart aku.service
+"$HOME/.local/bin/aku" setup
 sleep 2
 "$HOME/.local/bin/aku" doctor || true
 echo

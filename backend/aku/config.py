@@ -176,7 +176,8 @@ def vad_model_path() -> Path:
 def whisper_bin(tool: str = "whisper-server") -> Path | None:
     env = os.environ.get("AKU_WHISPER_BIN_DIR")
     candidates = [Path(env) / tool] if env else []
-    candidates.append(data_dir() / "deps" / "whisper.cpp" / "build" / "bin" / tool)
+    candidates.append(data_dir() / "deps" / "bin" / tool)  # from a release (get-aku.sh)
+    candidates.append(data_dir() / "deps" / "whisper.cpp" / "build" / "bin" / tool)  # built here
     for c in candidates:
         if c.exists():
             return c

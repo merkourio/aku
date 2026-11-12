@@ -6,17 +6,38 @@ Transcription runs on this computer by default (whisper.cpp on the GPU). OpenAI 
 
 ## Install
 
+Aku runs on 64-bit Linux with PipeWire (made on Fedora). The repository is private, so installing uses your GitHub login through the `gh` command.
+
+Once per computer:
+
 ```bash
-bash scripts/install.sh
+sudo dnf install gh pipewire-utils   # if not installed yet
+gh auth login
 ```
 
-This builds the UI, builds whisper.cpp if needed, installs the `aku` command, and starts Aku in the background at every login. No sudo. Run it again after changing the code; it refuses while Aku is recording or finishing a transcript, because updating restarts it. `bash scripts/install.sh --remove` undoes it.
+Then, to install or update to the latest release:
+
+```bash
+gh release download -R merkourio/aku -p get-aku.sh -O - | bash
+```
+
+No compiling and no sudo. It installs `uv` if needed, the `aku` command, a ready-made transcription engine (whisper.cpp with Vulkan), a background service that starts at every login, and an "Aku" entry in the app launcher. The first install downloads about 1 GB (Python and its libraries). Updating refuses while Aku is recording or finishing a transcript; add `-s -- --force` after `bash` to update anyway, or `-s -- --remove` to remove Aku (recordings and settings are kept).
+
+If the ready-made engine does not run on a computer, the installer builds it there instead; that needs `git`, `cmake` and `gcc-c++`.
 
 Check everything is in place:
 
 ```bash
 aku doctor
 ```
+
+### From the source code
+
+`bash scripts/install.sh` in a clone installs what is in that folder instead of a release: it builds the UI (needs `npm`) and whisper.cpp itself. Use it while developing. `bash scripts/install.sh --remove` undoes it.
+
+### Publishing a release
+
+From a clean, committed checkout: `bash scripts/release.sh 0.3.0 "What changed"`. It bumps the version, runs the tests, builds the UI into the package and a portable whisper-server, tags, pushes and creates the GitHub release that the install command fetches.
 
 ## Use
 
@@ -115,6 +136,7 @@ aku record          the whole flow in the terminal, without the service (--inter
 aku enrol           record your own voice once, so interview mode knows which speaker is you
 aku bench FILE.wav  measure how fast each local model runs on this machine
 aku doctor          check that everything Aku needs is in place
+aku setup           set up the background service and launcher entry again (--remove to take them away)
 aku serve           run the service in this terminal (the installer runs it for you)
 ```
 
@@ -165,7 +187,7 @@ backend/aku/
   shortcuts.py  global hotkey through the desktop portal
   cli.py      the aku command
 frontend/     Vue 3 + Vite + TypeScript UI; builds into backend/aku/static
-scripts/      install, whisper.cpp build, checks
+scripts/      installers (get-aku.sh: from a release; install.sh: from source), release, whisper.cpp build, checks
 ```
 
 ## Credits

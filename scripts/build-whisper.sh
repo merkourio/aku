@@ -5,7 +5,13 @@
 # system-wide (sudo dnf install vulkan-headers vulkan-loader-devel glslc spirv-headers-devel)
 # they are used. If not, this script downloads the Fedora packages and unpacks
 # them into a private folder: no sudo, nothing installed system-wide.
+#
+#   bash scripts/build-whisper.sh              for this computer (what the installers use as a fallback)
+#   bash scripts/build-whisper.sh --portable   for a release: one self-contained file that runs on other
+#                                              computers too (no -march=native, libraries linked in)
 set -euo pipefail
+PORTABLE=0
+[ "${1:-}" = "--portable" ] && PORTABLE=1
 
 DEPS="${AKU_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/aku}/deps"
 SRC="$DEPS/whisper.cpp"
@@ -21,6 +27,12 @@ if [ ! -d "$SRC/.git" ]; then
 fi
 
 CMAKE_ARGS=(-DCMAKE_BUILD_TYPE=Release -DGGML_VULKAN=1 -DWHISPER_BUILD_TESTS=OFF)
+BUILD="$SRC/build"
+if [ "$PORTABLE" = 1 ]; then
+  BUILD="$SRC/build-portable"
+  # x86-64-v3 (AVX2, any CPU from about 2015 on); the GPU does the heavy work anyway
+  CMAKE_ARGS+=(-DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON)
+fi
 
 if [ -f /usr/include/vulkan/vulkan.h ] && command -v glslc >/dev/null; then
   echo "Using system Vulkan build files."
@@ -36,8 +48,8 @@ else
                -DVulkan_LIBRARY=/usr/lib64/libvulkan.so.1 -DVulkan_GLSLC_EXECUTABLE="$S/bin/glslc")
 fi
 
-cmake -S "$SRC" -B "$SRC/build" "${CMAKE_ARGS[@]}"
-cmake --build "$SRC/build" -j"$(nproc)" --target whisper-cli whisper-server
+cmake -S "$SRC" -B "$BUILD" "${CMAKE_ARGS[@]}"
+cmake --build "$BUILD" -j"$(nproc)" --target whisper-server $([ "$PORTABLE" = 1 ] || echo whisper-cli)
 echo
-echo "Built: $SRC/build/bin/whisper-server"
+echo "Built: $BUILD/bin/whisper-server"
 echo "Check the GPU is used:  aku doctor"

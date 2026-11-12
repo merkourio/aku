@@ -236,6 +236,57 @@ def cmd_enrol(args) -> None:
     print("Saved your voice for:", ", ".join(i["space"] for i in info))
 
 
+UNIT = Path.home() / ".config" / "systemd" / "user" / "aku.service"
+DESKTOP = Path.home() / ".local" / "share" / "applications" / "aku.desktop"
+ICON = Path.home() / ".local" / "share" / "icons" / "hicolor" / "scalable" / "apps" / "aku.svg"
+
+
+def cmd_setup(args) -> None:
+    """The background service (starts at login) and the launcher entry, for the installed `aku`."""
+    def systemctl(*a: str) -> bool:
+        return subprocess.run(["systemctl", "--user", *a], capture_output=True).returncode == 0
+
+    if args.remove:
+        systemctl("disable", "--now", "aku.service")
+        for p in (UNIT, DESKTOP, ICON):
+            p.unlink(missing_ok=True)
+        systemctl("daemon-reload")
+        print("Removed the service and the launcher entry.")
+        return
+    exe = shutil.which("aku") or str(Path(sys.argv[0]).resolve())
+    for p in (UNIT, DESKTOP, ICON):
+        p.parent.mkdir(parents=True, exist_ok=True)
+    icon = Path(__file__).resolve().parent / "static" / "favicon.svg"
+    if icon.exists():
+        shutil.copyfile(icon, ICON)
+    UNIT.write_text(f"""[Unit]
+Description=Aku call transcriber
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart={exe} serve
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=graphical-session.target
+""")
+    DESKTOP.write_text(f"""[Desktop Entry]
+Type=Application
+Name=Aku
+Comment=Record and transcribe calls locally
+Exec={exe} open
+Icon=aku
+Categories=AudioVideo;Audio;Utility;
+Terminal=false
+""")
+    if systemctl("daemon-reload") and systemctl("enable", "aku.service") and systemctl("restart", "aku.service"):
+        print("Aku runs in the background and starts at every login.")
+    else:
+        print("Could not set up the background service (no systemd user session?). Start Aku with:  aku serve")
+
+
 def cmd_bench(args) -> None:
     from .asr import bench
 
@@ -337,6 +388,10 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--input", help="microphone name (default: the one you last recorded with)")
     p.add_argument("--forget", action="store_true", help="delete your saved voice sample")
     p.set_defaults(fn=cmd_enrol)
+
+    p = sub.add_parser("setup", help="set up the background service and the launcher entry (the installers run this)")
+    p.add_argument("--remove", action="store_true", help="remove them again")
+    p.set_defaults(fn=cmd_setup)
 
     p = sub.add_parser("bench", help="measure transcription speed of the local models")
     p.add_argument("wav", help="a 16 kHz mono WAV, ideally about 10 minutes")
