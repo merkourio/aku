@@ -29,11 +29,26 @@ aku doctor
 
 Always wear headphones: on speakers, your microphone also hears the other side and their words show up twice.
 
+### Interview mode
+
+For an interview in the same room, where everyone talks into one microphone.
+
+1. Once: in **Settings > Your voice**, press **Record my voice** and read aloud for 30 seconds. Aku then knows which voice is yours. (In a terminal: `aku enrol`.)
+2. On **Record**, tick **Interview mode**. Aku records the microphone only. If someone also joins by call, tick **Also record the computer's audio**, and make sure everyone in the room hears the call through headphones.
+3. While it records, your lines carry your name and the others show as Guest 1, Guest 2, … Set **People at the microphone** (you included) if Aku gets the number wrong.
+4. After Stop, name the guests from their clips. If Aku picked the wrong voice as yours, or you never recorded your voice, choose **This is me** on the right speaker; Aku also learns your voice from that recording when you save.
+
+Interview mode is chosen per recording and is never remembered: the hotkey and the next recording are a normal call again.
+
+Expect more mistakes than on a call. A laptop microphone hears the room, and when two people talk at once only one of them gets the words. An external microphone placed between the speakers helps a lot.
+
 ### Language
 
 Choose the language on the Record screen, or **Automatic** to let Aku detect it as people speak. Automatic also handles a call that mixes languages, for example Danish from the others and English from you. When you know the language, choosing it is a little more reliable, mostly for short replies like "ja" or "okay".
 
-The hotkey and `aku toggle` use the language of your last recording. The default is in Settings.
+With a language chosen, Aku writes everything as that language: with English chosen, something said in Danish often comes out translated into English. This is a side effect of the model and not reliable; some passages stay Danish. Tick **Keep other languages as they are spoken** on the Record screen to switch it off: speech in another language is then written in that language.
+
+The hotkey and `aku toggle` use the language and this choice from your last recording. The defaults are in Settings.
 
 ### Hotkey
 
@@ -76,6 +91,7 @@ The audio is written to disk continuously. On the next start the session shows a
 - **Show speakers during the call**: on by default. It uses the built-in method and some extra CPU while recording; the full pass after the call still decides the final labels.
 - **Hugging Face token**: optional. With a token (and the conditions accepted on the `pyannote/speaker-diarization-community-1` model page), speaker separation uses pyannote. Without one, Aku uses its built-in method, which needs no account.
 - **OpenAI API key**: only for the cloud engine. Stored in the system keyring. With the cloud engine, call audio is sent to OpenAI; check your company's policy before using it on work calls.
+- **Your voice**: a sample of your own voice, used only by interview mode to label your lines. It stays on this computer. **Forget my voice** removes it. If you switch between pyannote and the built-in method, record it again.
 - **Saved voices**: voiceprints of people you chose to remember. They stay on this computer. **Forget** removes one.
 
 ## Where things are
@@ -95,7 +111,8 @@ aku open            open the UI (starts the service if needed)
 aku toggle          start with the last settings, or stop
 aku status          what Aku is doing
 aku devices         microphones, outputs and apps playing audio
-aku record          the whole flow in the terminal, without the service
+aku record          the whole flow in the terminal, without the service (--interview for interview mode)
+aku enrol           record your own voice once, so interview mode knows which speaker is you
 aku bench FILE.wav  measure how fast each local model runs on this machine
 aku doctor          check that everything Aku needs is in place
 aku serve           run the service in this terminal (the installer runs it for you)
@@ -120,6 +137,7 @@ uv run python ../scripts/make_test_audio.py    # once: builds test recordings in
 uv run python ../scripts/check_capture.py      # both tracks match the wall clock, also when an app drops out
 uv run python ../scripts/check_live.py         # record, live transcript, speakers, Markdown on a simulated call
 uv run python ../scripts/check_live.py --long  # 10 minutes of back-to-back speech
+uv run python ../scripts/check_interview.py    # interview mode: 10 minutes, three people at one microphone
 uv run python ../scripts/check_diarize.py      # speaker separation at several call lengths
 uv run python ../scripts/check_language.py     # Danish chosen, Automatic, and a mixed Danish/English call
 uv run python ../scripts/check_recovery.py     # kill mid-recording and recover; improve; voiceprints
@@ -130,6 +148,7 @@ cd ../frontend && npm test                     # UI unit tests
 npx playwright install chromium                # once
 node e2e/check_ui.mjs                          # the full flow in a headless browser (service must be running)
 node e2e/check_language.mjs                    # the language selector, on Danish speech
+node e2e/check_interview.mjs                   # interview mode (against a throwaway service; see the top of the file)
 ```
 
 Layout:

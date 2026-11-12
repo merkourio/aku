@@ -301,6 +301,7 @@ class Capture:
         self.mic = ClockedTrack(self.dir / "mic.wav", self.t0)
         self.system = ClockedTrack(self.dir / "system.wav", self.t0)
         scope_apps = sources.get("scope") == "apps" and sources.get("apps")
+        silent = sources.get("scope") == "none"  # interview without computer audio: nothing is linked in
         self.warnings: list[str] = []
         mic_target, mic_is_sink = self._resolve(sources.get("input"), "Audio/Source", "microphone")
         out_target, _ = self._resolve(sources.get("output"), "Audio/Sink", "output device")
@@ -308,9 +309,9 @@ class Capture:
         self.system_stream = PwStream(
             self.system,
             f"aku-system-{tag}",
-            None if scope_apps else out_target,
-            capture_sink=not scope_apps,
-            no_autoconnect=bool(scope_apps),
+            None if scope_apps or silent else out_target,
+            capture_sink=not (scope_apps or silent),
+            no_autoconnect=bool(scope_apps or silent),
         )
         self.linker = AppLinker(f"aku-system-{tag}", list(sources["apps"])) if scope_apps else None
         self.stopped_at: float | None = None
@@ -367,3 +368,38 @@ class Capture:
         if self.system.error or self.system_stream.error:
             out["system"] = self.system.error or self.system_stream.error
         return out
+
+
+def record_clip(path: Path, seconds: float, target: str | None = None, capture_sink: bool = False) -> float:
+    """Record the microphone for a fixed time into a WAV (voice enrolment). Returns the seconds recorded.
+
+    capture_sink: the target is an output device, so record what it plays.
+    """
+    cmd = ["pw-record"] + (["-P", "{ stream.capture.sink=true }"] if capture_sink else [])
+    cmd += ["--target", target] if target else []
+    cmd += ["--rate", str(SR), "--channels", "1", "--format", "s16", "--raw", "-"]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0, preexec_fn=die_with_parent)
+    fd = proc.stdout.fileno()
+    want = int(seconds * SR) * 2
+    data = bytearray()
+    deadline = time.monotonic() + seconds + 5
+    try:
+        while len(data) < want and time.monotonic() < deadline:
+            if select.select([fd], [], [], 0.25)[0]:
+                block = os.read(fd, 1 << 16)
+                if not block:
+                    break
+                data += block
+            elif proc.poll() is not None:
+                break
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    pcm = np.frombuffer(bytes(data[: min(len(data), want) // 2 * 2]), dtype="<i2")
+    writer = WavWriter(path, SR)
+    writer.write(pcm)
+    writer.close()
+    return len(pcm) / SR

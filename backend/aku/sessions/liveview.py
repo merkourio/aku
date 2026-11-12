@@ -19,20 +19,20 @@ class LiveView:
     def __init__(self, user_name: str, rules: list):
         self.user_name = user_name
         self.rules = rules
-        self.turns: Turns | None = None
+        self.turns: dict[str, Turns] = {}  # per track; the mic only has turns in interview mode
         self._segments: dict[int, Segment] = {}
         self._lines: dict[int, list[dict]] = {}
         self._lock = threading.Lock()
 
     def _build(self, seg: Segment) -> list[dict]:
-        if seg.track == "mic":
-            parts = [(merge.ME, seg.start, seg.end, seg.text)]
-        elif self.turns is None or not self.turns.turns or not seg.words:
-            parts = [(merge.THEM, seg.start, seg.end, seg.text)]
+        unknown = merge.ME if seg.track == "mic" else merge.THEM
+        turns = self.turns.get(seg.track)
+        if turns is None or not turns.turns or not seg.words:
+            parts = [(unknown, seg.start, seg.end, seg.text)]
         else:
             parts = [
-                (label or merge.THEM, words[0].start, words[-1].end, " ".join(w.text for w in words))
-                for label, words in runs(seg.words, assign_words(seg.words, self.turns))
+                (label or unknown, words[0].start, words[-1].end, " ".join(w.text for w in words))
+                for label, words in runs(seg.words, assign_words(seg.words, turns))
             ]
         return [
             {
@@ -53,13 +53,13 @@ class LiveView:
             self._lines[seg.id] = lines = self._build(seg)
             return lines
 
-    def relabel(self, turns: list[dict]) -> dict[int, list[dict]]:
-        """New speaker turns arrived: returns the segments whose lines changed."""
+    def relabel(self, turns: list[dict], track: str = "system") -> dict[int, list[dict]]:
+        """New speaker turns arrived for a track: returns the segments whose lines changed."""
         with self._lock:
-            self.turns = Turns(turns)
+            self.turns[track] = Turns(turns)
             changed = {}
             for sid, seg in self._segments.items():
-                if seg.track == "mic":
+                if seg.track != track:
                     continue
                 lines = self._build(seg)
                 if lines != self._lines[sid]:

@@ -17,6 +17,13 @@ CREATE TABLE IF NOT EXISTS voiceprints (
     session TEXT,
     created TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS my_voice (     -- the owner's own voice (interview mode)
+    id INTEGER PRIMARY KEY,
+    space TEXT NOT NULL,
+    embedding BLOB NOT NULL,
+    session TEXT,
+    created TEXT NOT NULL DEFAULT (datetime('now'))
+);
 CREATE TABLE IF NOT EXISTS vocab_sets (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,

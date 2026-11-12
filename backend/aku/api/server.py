@@ -31,15 +31,25 @@ class StartBody(BaseModel):
     backend: str | None = None
     vocab_sets: list[str] | None = None
     language: str | None = None
+    translate: bool | None = None  # with a language chosen: write other languages in it too (default: last choice)
+    interview: bool = False  # several people at the microphone; scope may then be "none" (no computer audio)
 
 
 class SpeakersBody(BaseModel):
     speakers: Any = "auto"
+    mic_speakers: Any = "auto"  # on stop, interview mode: people at the microphone, you included
+    track: str = "system"  # for live-speakers and diarize: "system" or "mic"
 
 
 class SpeakerBody(BaseModel):
     name: str | None = None
     remember_voice: bool | None = None
+    me: bool | None = None  # interview mode: this speaker at the microphone is you
+
+
+class EnrolBody(BaseModel):
+    seconds: float = 30
+    input: str | None = None
 
 
 class FinalizeBody(BaseModel):
@@ -71,6 +81,7 @@ def settings_view() -> dict:
     s["models"] = {m: config.model_path(m).exists() for m in KNOWN_MODELS}
     s["whisper_ready"] = config.whisper_bin("whisper-server") is not None
     s["languages"] = [{"code": code, "name": name} for code, name in config.LANGUAGES.items()]
+    s["my_voice"] = voiceprints.me_info()
     s["version"] = __version__
     return s
 
@@ -159,7 +170,7 @@ def create_app(manager: Manager | None = None, port: int | None = None, tray: bo
             for key in ("input", "output"):  # explicit null means "default device"
                 if key in body.model_fields_set and getattr(body, key) is None:
                     sources[key] = None
-        return manager.start(sources, body.backend, body.vocab_sets, body.language)
+        return manager.start(sources, body.backend, body.vocab_sets, body.language, body.interview, body.translate)
 
     @app.get("/sessions")
     def sessions():
@@ -171,15 +182,15 @@ def create_app(manager: Manager | None = None, port: int | None = None, tray: bo
 
     @app.post("/sessions/{sid}/stop")
     def stop(sid: str, body: SpeakersBody | None = None):
-        return manager.stop(sid, body.speakers if body else "auto")
+        return manager.stop(sid, body.speakers if body else "auto", mic_speakers=body.mic_speakers if body else "auto")
 
     @app.post("/sessions/{sid}/live-speakers")
     def live_speakers(sid: str, body: SpeakersBody):
-        return manager.set_live_speakers(sid, body.speakers)
+        return manager.set_live_speakers(sid, body.speakers, body.track)
 
     @app.post("/sessions/{sid}/diarize")
     def rediarize(sid: str, body: SpeakersBody | None = None):
-        return manager.rediarize(sid, body.speakers if body else "auto")
+        return manager.rediarize(sid, body.speakers if body else "auto", body.track if body else "system")
 
     @app.get("/sessions/{sid}/speakers")
     def speakers(sid: str):
@@ -191,7 +202,7 @@ def create_app(manager: Manager | None = None, port: int | None = None, tray: bo
 
     @app.put("/sessions/{sid}/speakers/{spk}")
     def set_speaker(sid: str, spk: str, body: SpeakerBody):
-        return manager.set_speaker(sid, spk, body.name, body.remember_voice)
+        return manager.set_speaker(sid, spk, body.name, body.remember_voice, body.me)
 
     @app.post("/sessions/{sid}/finalize")
     def finalize(sid: str, body: FinalizeBody | None = None):
@@ -294,6 +305,20 @@ def create_app(manager: Manager | None = None, port: int | None = None, tray: bo
     @app.get("/voiceprints")
     def get_voiceprints():
         return voiceprints.people()
+
+    @app.get("/voiceprints/me")
+    def my_voice():
+        return voiceprints.me_info()
+
+    @app.post("/voiceprints/me")
+    def enrol_my_voice(body: EnrolBody | None = None):
+        """Records the microphone for `seconds` and answers when the voiceprint is saved."""
+        body = body or EnrolBody()
+        return manager.enrol_me(body.seconds, body.input)
+
+    @app.delete("/voiceprints/me")
+    def forget_my_voice():
+        return {"forgotten": voiceprints.forget_me()}
 
     @app.delete("/voiceprints/{name}")
     def forget_voice(name: str):

@@ -152,8 +152,12 @@ def cmd_record(args) -> None:
             print(f"\r{e['step']} {e['progress']*100:3.0f}%", end="", flush=True)
 
     manager.bus.subscribe(on_event)
-    sources = {"input": args.input, "output": args.output, "scope": "apps" if args.app else "all", "apps": args.app or []}
-    s = manager.start(sources, backend=args.backend, language=args.language)
+    scope = "apps" if args.app else "all"
+    if args.interview and not args.computer_audio:
+        scope = "none"  # an in-person interview: the microphone only
+    sources = {"input": args.input, "output": args.output, "scope": scope, "apps": args.app or []}
+    s = manager.start(sources, backend=args.backend, language=args.language, interview=args.interview,
+                      translate=False if args.as_spoken else None)
     sid = s["id"]
     print(f"Recording (session {sid}). Press Ctrl+C to stop.\n")
     try:
@@ -165,18 +169,39 @@ def cmd_record(args) -> None:
     except KeyboardInterrupt:
         pass
     print("\nStopping…")
-    speakers = args.speakers
-    if speakers is None:
+    speakers, mic_speakers = args.speakers, args.mic_speakers
+    if speakers is None and scope != "none":
         answer = input("How many other speakers were on the call? [Enter = detect automatically] ").strip()
         speakers = answer or "auto"
-    manager.stop(sid, speakers)
+    if mic_speakers is None and args.interview:
+        answer = input("How many people were at the microphone, you included? [Enter = detect automatically] ").strip()
+        mic_speakers = answer or "auto"
+    manager.stop(sid, speakers or "auto", mic_speakers=mic_speakers or "auto")
     manager.wait(sid)
     print()
     d = manager.detail(sid)
     if d["status"] != "naming":
         sys.exit(f"Processing failed: {d.get('error')}")
+    mic_people = [sp for sp in d["speakers"] if sp["track"] == "mic"]
+    if mic_people and not any(sp["me"] for sp in mic_people):
+        print("Aku could not tell which voice at the microphone is yours (run `aku enrol` once to teach it).")
     for sp in d["speakers"]:
+        if sp["me"]:
+            print(f"{sp['display']} (you) spoke for {sp['duration']:.0f}s.")
+            continue
         while True:
+            if sp["track"] == "mic" and not any(x["me"] for x in mic_people):
+                play = manager.session(sid).dir / "clip.wav"
+                answer = input(f"{sp['display']} spoke for {sp['duration']:.0f}s. Is this you? [y/N, p = play clip] ").strip().lower()
+                if answer == "p":
+                    play.write_bytes(manager.speaker_clip(sid, sp["id"]))
+                    subprocess.run(["pw-play", str(play)])
+                    play.unlink(missing_ok=True)
+                    continue
+                if answer == "y":
+                    manager.set_speaker(sid, sp["id"], None, me=True)
+                    sp["me"] = True
+                    break
             hint = f" [{sp['suggested']}]" if sp["suggested"] else ""
             answer = input(f"{sp['display']} spoke for {sp['duration']:.0f}s. Name{hint} (p = play clip, Enter = {'accept' if sp['suggested'] else 'skip'}): ").strip()
             if answer.lower() == "p":
@@ -193,6 +218,22 @@ def cmd_record(args) -> None:
     title = args.title or input("Title for this transcript: ").strip()
     final = manager.finalize(sid, title or None, args.out)
     print(f"\nSaved: {final['output_path']}")
+
+
+def cmd_enrol(args) -> None:
+    """Teach Aku the owner's voice, so interview mode knows who at the microphone is you."""
+    from .diarize import voiceprints
+    from .sessions.manager import Manager
+
+    if args.forget:
+        print("Forgotten." if voiceprints.forget_me() else "No voice sample was saved.")
+        return
+    print(f"Read anything aloud in your normal voice for {args.seconds:.0f} seconds. Recording starts now…")
+    try:
+        info = Manager().enrol_me(args.seconds, args.input)
+    except (ValueError, RuntimeError) as e:
+        sys.exit(f"Aku: {e}")
+    print("Saved your voice for:", ", ".join(i["space"] for i in info))
 
 
 def cmd_bench(args) -> None:
@@ -279,10 +320,23 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--speakers", help='"auto" or the number of other speakers (asked if omitted)')
     p.add_argument("--backend", choices=["local", "cloud"])
     p.add_argument("--language", help='language code such as en or da, or "auto" (default: your last choice)')
+    p.add_argument("--as-spoken", action="store_true",
+                   help="with a language chosen: keep speech in other languages as spoken instead of writing it in that language")
     p.add_argument("--seconds", type=float, help="stop by itself after this long")
+    p.add_argument("--interview", action="store_true",
+                   help="several people share the microphone: tell them apart too; records the microphone only")
+    p.add_argument("--computer-audio", action="store_true",
+                   help="with --interview: also record the computer's audio (everyone in the room must wear headphones)")
+    p.add_argument("--mic-speakers", help='with --interview: "auto" or the number of people at the microphone, you included')
     p.add_argument("--title")
     p.add_argument("--out", help="output folder (default from settings)")
     p.set_defaults(fn=cmd_record)
+
+    p = sub.add_parser("enrol", help="record your own voice once, so interview mode knows which speaker is you")
+    p.add_argument("--seconds", type=float, default=30)
+    p.add_argument("--input", help="microphone name (default: the one you last recorded with)")
+    p.add_argument("--forget", action="store_true", help="delete your saved voice sample")
+    p.set_defaults(fn=cmd_enrol)
 
     p = sub.add_parser("bench", help="measure transcription speed of the local models")
     p.add_argument("wav", help="a 16 kHz mono WAV, ideally about 10 minutes")

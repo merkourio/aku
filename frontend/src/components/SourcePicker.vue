@@ -4,6 +4,8 @@ import { api } from '../api'
 import type { Devices, Sources } from '../types'
 
 const sources = defineModel<Sources>({ required: true })
+// micOnly: interview mode without computer audio, so only the microphone is chosen
+const props = defineProps<{ micOnly?: boolean; room?: boolean }>()
 const devices = ref<Devices>({ inputs: [], outputs: [], apps: [] })
 let timer: number | undefined
 
@@ -41,7 +43,7 @@ function toggleApp(key: string, on: boolean) {
 <template>
   <div class="stack">
     <label class="field">
-      Microphone (you)
+      {{ props.room ? 'Microphone (everyone in the room)' : 'Microphone (you)' }}
       <select v-model="sources.input">
         <option :value="null">System default</option>
         <option v-for="d in devices.inputs" :key="d.name" :value="d.name">
@@ -50,13 +52,13 @@ function toggleApp(key: string, on: boolean) {
       </select>
     </label>
 
-    <div class="field">
+    <div v-if="!props.micOnly" class="field">
       <span style="font-weight: 500; font-size: 0.9rem">Computer audio (them)</span>
       <label class="check"><input v-model="sources.scope" type="radio" value="all" /> Everything playing on an output device</label>
       <label class="check"><input v-model="sources.scope" type="radio" value="apps" /> Only specific apps</label>
     </div>
 
-    <label v-if="sources.scope === 'all'" class="field">
+    <label v-if="!props.micOnly && sources.scope === 'all'" class="field">
       Output device
       <select v-model="sources.output">
         <option :value="null">System default</option>
@@ -66,7 +68,7 @@ function toggleApp(key: string, on: boolean) {
       </select>
     </label>
 
-    <div v-else class="stack" style="gap: 6px">
+    <div v-else-if="!props.micOnly" class="stack" style="gap: 6px">
       <label v-for="a in apps" :key="a.key" class="check">
         <input type="checkbox" :checked="sources.apps.includes(a.key)" @change="toggleApp(a.key, ($event.target as HTMLInputElement).checked)" />
         {{ a.label }} <span v-if="!a.playing" class="muted small">(not playing right now; picked up when it starts)</span>

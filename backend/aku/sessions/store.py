@@ -45,6 +45,8 @@ class Session:
     @property
     def diarization_path(self) -> Path: return self.dir / "diarization.json"
     @property
+    def mic_diarization_path(self) -> Path: return self.dir / "diarization.mic.json"  # interview mode
+    @property
     def speakers_path(self) -> Path: return self.dir / "speakers.json"
     @property
     def transcript_path(self) -> Path: return self.dir / "transcript.json"
@@ -96,6 +98,16 @@ class Session:
     @property
     def diarization(self) -> dict | None:
         return read_json(self.diarization_path)
+
+    @property
+    def mic_diarization(self) -> dict | None:
+        return read_json(self.mic_diarization_path)
+
+    def diarization_path_for(self, track: str) -> Path:
+        return self.mic_diarization_path if track == "mic" else self.diarization_path
+
+    def diarization_for(self, track: str) -> dict | None:
+        return read_json(self.diarization_path_for(track))
 
     @property
     def speakers(self) -> dict:

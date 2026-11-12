@@ -23,6 +23,7 @@ export const statusLabel: Record<string, string> = {
 /** A stable colour slot (0-5) per speaker id, so each voice keeps its colour. */
 export function speakerSlot(speaker: string): number {
   if (speaker === 'me') return 0
-  const n = Number(speaker.replace(/\D/g, ''))
+  // people at the microphone (M1, M2, ...) start at another colour than the other side (S1, S2, ...)
+  const n = Number(speaker.replace(/\D/g, '')) + (speaker.startsWith('M') ? 2 : 0)
   return Number.isFinite(n) && n > 0 ? ((n - 1) % 5) + 1 : 1
 }

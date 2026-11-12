@@ -18,6 +18,7 @@ const names = reactive<Record<string, string>>({})
 const title = ref('')
 const folder = ref('')
 const count = ref<number | 'auto'>('auto')
+const micCount = ref<number | 'auto'>('auto')
 const engine = ref<'local_large' | 'cloud' | 'cloud_diarize'>('local_large')
 const confirm = ref<null | 'audio' | 'session'>(null)
 const working = ref(false)
@@ -39,6 +40,7 @@ async function load() {
     if (!title.value) title.value = d.title
     if (!folder.value) folder.value = d.output_path ? d.output_path.replace(/\/[^/]*$/, '') : (aku.settings?.output_folder ?? '')
     count.value = d.speakers_requested
+    micCount.value = d.mic_speakers_requested
   } catch {
     missing.value = true
   }
@@ -88,16 +90,33 @@ async function setRemember(spk: string, on: boolean) {
   if (updated) detail.value = updated
 }
 
-async function rerun() {
-  await aku.run(() => api.diarize(props.id, count.value))
+async function rerun(track: 'system' | 'mic' = 'system') {
+  await aku.run(() => api.diarize(props.id, track === 'mic' ? micCount.value : count.value, track))
   for (const k of Object.keys(names)) delete names[k]
+}
+
+// Interview mode: the people at the microphone, one of whom is the owner.
+const room = computed(() => detail.value?.speakers.filter((s) => s.track === 'mic') ?? [])
+const callers = computed(() => detail.value?.speakers.filter((s) => s.track !== 'mic') ?? [])
+const groups = computed(() => {
+  const d = detail.value
+  if (!d) return []
+  const out = []
+  if (d.interview) out.push({ track: 'mic' as const, title: 'At the microphone', people: room.value })
+  if (!d.system_off) out.push({ track: 'system' as const, title: d.interview ? 'On the call' : '', people: callers.value })
+  return out
+})
+
+async function setMe(spk: string) {
+  const updated = await aku.run(() => api.setSpeaker(props.id, spk, { me: true }))
+  if (updated) detail.value = updated
 }
 
 async function finalise() {
   working.value = true
   // names typed but not yet blurred, and suggestions the user left in place, are confirmed here
   for (const s of detail.value?.speakers ?? []) {
-    if (names[s.id]?.trim() && names[s.id].trim() !== (s.name ?? '')) await saveName(s.id)
+    if (!s.me && names[s.id]?.trim() && names[s.id].trim() !== (s.name ?? '')) await saveName(s.id)
   }
   const done = await aku.run(() => api.finalize(props.id, title.value, folder.value))
   working.value = false
@@ -165,9 +184,9 @@ async function saveFix() {
     <template v-else-if="detail">
       <div class="row spread">
         <div class="grow">
-          <h1>{{ detail.title || 'Untitled call' }}</h1>
+          <h1>{{ detail.title || (detail.interview ? 'Untitled interview' : 'Untitled call') }}</h1>
           <p class="muted small">
-            {{ when(detail.created) }} · {{ clock(detail.duration) }} · {{ languageName }} · {{ detail.improved_with ?? detail.backend }}
+            {{ when(detail.created) }} · {{ clock(detail.duration) }} · {{ languageName }} · {{ detail.improved_with ?? detail.backend }}{{ detail.translate === false && detail.language !== 'auto' ? ' · other languages as spoken' : '' }}{{ detail.interview ? ' · interview' : '' }}
           </p>
         </div>
         <span class="badge" :class="detail.status">{{ statusLabel[detail.status] ?? detail.status }}</span>
@@ -197,37 +216,55 @@ async function saveFix() {
       <template v-if="ready">
         <!-- speakers -->
         <div class="panel">
-          <div class="row spread">
-            <h2 style="margin: 0">Who was on the call?</h2>
-            <div class="row small">
-              <span class="muted">Speakers on the other side:</span>
-              <select v-model="count" style="width: auto">
-                <option value="auto">Detect</option>
-                <option v-for="n in 8" :key="n" :value="n">{{ n }}</option>
-              </select>
-              <button :disabled="!!job || !detail.has_audio" @click="rerun">Re-run</button>
-            </div>
-          </div>
-          <p v-if="!detail.speakers.length" class="muted" style="margin-top: 10px">Nobody was heard on the other side.</p>
-          <div v-for="s in detail.speakers" :key="s.id" class="row" style="margin-top: 12px; align-items: flex-start">
-            <button :disabled="!detail.has_audio" :title="detail.has_audio ? 'Play a short clip of this voice' : 'Audio was deleted'" @click="play(s.id, api.clipUrl(id, s.id))">
-              {{ playing === s.id ? '■' : '▶' }}
-            </button>
-            <div class="grow">
-              <input
-                v-model="names[s.id]" type="text" :placeholder="s.display" :aria-label="`Name for ${s.display}`"
-                :style="{ borderLeft: `4px solid var(--s${speakerSlot(s.id)})` }"
-                @blur="saveName(s.id)" @keyup.enter="($event.target as HTMLInputElement).blur()"
-              />
-              <div class="small muted" style="margin-top: 3px">
-                {{ s.display }} · spoke {{ clock(s.duration) }}
-                <template v-if="s.suggested && !s.name"> · sounds like <b>{{ s.suggested }}</b> (confirm by saving)</template>
+          <h2 style="margin: 0">{{ detail.interview ? 'Who was talking?' : 'Who was on the call?' }}</h2>
+          <div v-for="g in groups" :key="g.track" :data-group="g.track" style="margin-top: 12px">
+            <div class="row spread">
+              <b>{{ g.title }}</b>
+              <div class="row small">
+                <span class="muted">{{ g.track === 'mic' ? 'People at the microphone, you included:' : 'Speakers on the other side:' }}</span>
+                <select v-if="g.track === 'mic'" v-model="micCount" style="width: auto">
+                  <option value="auto">Detect</option>
+                  <option v-for="n in 8" :key="n" :value="n">{{ n }}</option>
+                </select>
+                <select v-else v-model="count" style="width: auto">
+                  <option value="auto">Detect</option>
+                  <option v-for="n in 8" :key="n" :value="n">{{ n }}</option>
+                </select>
+                <button :disabled="!!job || !detail.has_audio" @click="rerun(g.track)">Re-run</button>
               </div>
             </div>
-            <label class="check small" style="padding-top: 8px" :title="'Keeps a voiceprint on this computer so Aku can suggest the name next time'">
-              <input type="checkbox" :checked="s.remember" :disabled="!names[s.id]?.trim()" @change="setRemember(s.id, ($event.target as HTMLInputElement).checked)" />
-              Remember this voice
-            </label>
+            <p v-if="!g.people.length" class="muted" style="margin-top: 10px">
+              {{ g.track === 'mic' ? 'Nobody was heard at the microphone.' : 'Nobody was heard on the other side.' }}
+            </p>
+            <p v-else-if="g.track === 'mic' && !g.people.some((s) => s.me)" class="small" style="color: var(--warn); margin: 10px 0 0">
+              Which of these voices is yours? Play the clips and choose “This is me”.
+            </p>
+            <div v-for="s in g.people" :key="s.id" class="row" style="margin-top: 12px; align-items: flex-start">
+              <button :disabled="!detail.has_audio" :title="detail.has_audio ? 'Play a short clip of this voice' : 'Audio was deleted'" @click="play(s.id, api.clipUrl(id, s.id))">
+                {{ playing === s.id ? '■' : '▶' }}
+              </button>
+              <div class="grow">
+                <div v-if="s.me" style="padding: 7px 10px; border-left: 4px solid var(--s0)"><b>{{ s.display }}</b> (you)</div>
+                <input
+                  v-else
+                  v-model="names[s.id]" type="text" :placeholder="s.display" :aria-label="`Name for ${s.display}`"
+                  :style="{ borderLeft: `4px solid var(--s${speakerSlot(s.id)})` }"
+                  @blur="saveName(s.id)" @keyup.enter="($event.target as HTMLInputElement).blur()"
+                />
+                <div class="small muted" style="margin-top: 3px">
+                  {{ s.me ? 'Your voice' : s.display }} · spoke {{ clock(s.duration) }}
+                  <template v-if="s.suggested && !s.name && !s.me"> · sounds like <b>{{ s.suggested }}</b> (confirm by saving)</template>
+                </div>
+              </div>
+              <label v-if="g.track === 'mic'" class="check small" style="padding-top: 8px" title="Their lines get your name, and Aku learns your voice from this recording when you save">
+                <input type="radio" :name="`me-${id}`" :checked="s.me" :disabled="!!job" @change="setMe(s.id)" />
+                This is me
+              </label>
+              <label v-if="!s.me" class="check small" style="padding-top: 8px" :title="'Keeps a voiceprint on this computer so Aku can suggest the name next time'">
+                <input type="checkbox" :checked="s.remember" :disabled="!names[s.id]?.trim()" @change="setRemember(s.id, ($event.target as HTMLInputElement).checked)" />
+                Remember this voice
+              </label>
+            </div>
           </div>
           <p class="small muted" style="margin: 12px 0 0">
             Voices are only remembered when you tick the box, and stay on this computer. Ask people before saving theirs.
@@ -274,7 +311,7 @@ async function saveFix() {
           <span class="small muted">Re-transcribes the whole recording and keeps the speaker names. The current version is kept as a backup.</span>
         </div>
         <p v-if="engine === 'cloud_diarize'" class="small muted" style="margin: 0">
-          Uploads the whole recording of the other side to OpenAI ({{ aku.settings?.cloud_diarize_model }}), which also decides who said what.
+          Uploads the whole recording of {{ detail.interview ? (detail.system_off ? 'the microphone' : 'both sides') : 'the other side' }} to OpenAI ({{ aku.settings?.cloud_diarize_model }}), which also decides who said what.
           Names you gave are carried over. OpenAI retires this model on 26 Feb 2027.
         </p>
         <p v-else-if="engine === 'cloud'" class="small muted" style="margin: 0">Sends the audio to OpenAI in short chunks; speakers stay as they are.</p>

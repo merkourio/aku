@@ -19,7 +19,7 @@ export interface Devices {
 export interface Sources {
   input: string | null
   output: string | null
-  scope: 'all' | 'apps'
+  scope: 'all' | 'apps' | 'none' // none: interview mode without computer audio
   apps: string[]
 }
 
@@ -37,7 +37,15 @@ export interface Status {
   pending: number
   capture_errors: Record<string, string>
   mic_silent?: boolean
-  live?: { enabled: boolean; speakers: number | 'auto'; found: number } | null
+  interview?: boolean
+  system_off?: boolean
+  enrolling?: boolean
+  live?: {
+    enabled: boolean
+    speakers: number | 'auto'
+    found: number
+    mic?: { speakers: number | 'auto'; found: number } | null
+  } | null
   jobs: Record<string, JobInfo>
   download?: { model: string; progress: number } | null
 }
@@ -53,6 +61,8 @@ export interface SessionSummary {
   backend: string | null
   improved_with: string | null
   language: string
+  translate?: boolean
+  interview?: boolean
   output_path: string | null
   has_audio: boolean
   error: string | null
@@ -80,12 +90,16 @@ export interface Speaker {
   saved: boolean
   lines: number
   display: string
+  track: 'system' | 'mic'
+  me: boolean
 }
 
 export interface SessionDetail extends SessionSummary {
   sources: Sources | null
   vocab_sets: string[]
   speakers_requested: number | 'auto'
+  mic_speakers_requested: number | 'auto'
+  system_off: boolean
   diarizer: string | null
   user_name: string
   lines: Line[]
@@ -102,6 +116,7 @@ export interface Settings {
   cloud_diarize_model: string
   use_gpu: boolean
   language: string
+  translate: boolean
   diarizer: 'auto' | 'pyannote' | 'basic'
   live_diarization: boolean
   global_shortcut: boolean
@@ -117,6 +132,7 @@ export interface Settings {
   models: Record<string, boolean>
   languages: { code: string; name: string }[]
   whisper_ready: boolean
+  my_voice: MyVoice[]
   version: string
 }
 
@@ -134,6 +150,13 @@ export interface Rule {
 export interface Vocab {
   sets: VocabSet[]
   rules: Rule[]
+}
+
+/** The owner's own voice, per speaker-separation method it is enrolled for. */
+export interface MyVoice {
+  space: string
+  samples: number
+  updated: string
 }
 
 export interface Voice {

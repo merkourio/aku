@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { api } from '../api'
 import { useAku } from '../store'
 import type { Rule, Settings, Voice } from '../types'
@@ -50,7 +50,7 @@ async function save(extra: Record<string, unknown> = {}) {
   if (!f) return
   const body = {
     user_name: f.user_name, output_folder: f.output_folder, backend: f.backend, local_model: f.local_model,
-    improve_model: f.improve_model, cloud_model: f.cloud_model, use_gpu: f.use_gpu, diarizer: f.diarizer, language: f.language,
+    improve_model: f.improve_model, cloud_model: f.cloud_model, use_gpu: f.use_gpu, diarizer: f.diarizer, language: f.language, translate: f.translate,
     notifications: f.notifications, tray: f.tray, live_diarization: f.live_diarization, global_shortcut: f.global_shortcut, active_vocab_sets: f.active_vocab_sets, ...extra,
   }
   const s = await aku.run(() => api.saveSettings(body))
@@ -119,6 +119,36 @@ async function forget(name: string) {
   if (await aku.run(() => api.forgetVoice(name))) voices.value = voices.value.filter((v) => v.name !== name)
 }
 
+// --- my own voice (interview mode) -------------------------------------------------
+const ENROL_SECONDS = 30
+const enrolLeft = ref<number | null>(null) // seconds still to read; 0 = working on it
+let enrolTimer: number | undefined
+onUnmounted(() => window.clearInterval(enrolTimer))
+const myVoice = computed(() => form.value?.my_voice ?? [])
+const methodName = (space: string) => (space === 'community-1' ? 'pyannote' : 'built-in')
+
+async function enrol() {
+  enrolLeft.value = ENROL_SECONDS
+  enrolTimer = window.setInterval(() => {
+    if (enrolLeft.value) enrolLeft.value -= 1
+  }, 1000)
+  const voice = await aku.run(() => api.enrolMyVoice(ENROL_SECONDS))
+  window.clearInterval(enrolTimer)
+  enrolLeft.value = null
+  if (voice && form.value) {
+    form.value.my_voice = voice
+    if (aku.settings) aku.settings.my_voice = voice
+    flash('Your voice is saved')
+  }
+}
+
+async function forgetMe() {
+  if ((await aku.run(() => api.forgetMyVoice())) && form.value) {
+    form.value.my_voice = []
+    if (aku.settings) aku.settings.my_voice = []
+  }
+}
+
 function toggleActive(name: string, on: boolean) {
   const f = form.value
   if (!f) return
@@ -183,6 +213,14 @@ function toggleActive(name: string, on: boolean) {
           </select>
           <span class="hint">You can change it per recording. The hotkey uses the language of your last recording.</span>
         </label>
+        <label v-if="form.language !== 'auto'" class="check">
+          <input type="checkbox" :checked="!form.translate" @change="form.translate = !($event.target as HTMLInputElement).checked; save()" />
+          Keep other languages as they are spoken
+        </label>
+        <p v-if="form.language !== 'auto'" class="muted small" style="margin: -6px 0 0">
+          Off: everything is written as the chosen language, so other languages are often translated, but not reliably.
+          On: speech in another language is written in that language. You can change it per recording.
+        </p>
         <label class="field">
           Default engine
           <select v-model="form.backend" @change="save()">
@@ -292,6 +330,38 @@ function toggleActive(name: string, on: boolean) {
           <input v-model="newRule.right" class="grow" style="width: auto" type="text" placeholder="Write as, e.g. ExampleCo" @keyup.enter="addRule" />
           <button :disabled="!newRule.wrong.trim() || !newRule.right.trim()" @click="addRule">Add</button>
         </div>
+      </div>
+
+      <div class="panel stack" data-panel="my-voice">
+        <h2 style="margin: 0">Your voice</h2>
+        <p class="muted small" style="margin: 0">
+          For interview mode, where several people talk into one microphone: Aku uses a sample of your voice to label your
+          lines with your name. It stays on this computer.
+        </p>
+        <p v-if="myVoice.length" style="margin: 0">
+          Saved for the {{ myVoice.map((v) => methodName(v.space)).join(' and the ') }} method.
+        </p>
+        <p v-else class="muted" style="margin: 0">Not recorded yet.</p>
+        <div v-if="enrolLeft !== null" class="stack" style="gap: 8px">
+          <p v-if="enrolLeft > 0" style="margin: 0"><span class="dot rec" /><b>Recording: keep reading aloud for {{ enrolLeft }} more seconds.</b></p>
+          <p v-else style="margin: 0"><b>Working on it…</b></p>
+          <p style="margin: 0; line-height: 1.6">
+            Read this in your normal speaking voice, at the distance you usually sit from the microphone. The words do not
+            matter, only how you sound: Aku listens to my voice so that it can tell me apart from the other people in the
+            room. I am reading at a calm, steady pace, the way I talk in a meeting or an interview. If I run out of text
+            before the time is up, I simply start again from the top, or talk about what I did today, until the recording stops.
+          </p>
+        </div>
+        <div v-else class="row">
+          <button class="primary" :disabled="aku.status.recording || !!aku.status.enrolling" @click="enrol">
+            {{ myVoice.length ? 'Record again' : `Record my voice (${ENROL_SECONDS} seconds)` }}
+          </button>
+          <button v-if="myVoice.length" class="danger" @click="forgetMe">Forget my voice</button>
+          <span class="small muted">Uses the microphone of your last recording. You read a short text aloud.</span>
+        </div>
+        <p v-if="form.diarizer_in_use === 'pyannote' && myVoice.length && !myVoice.some((v) => v.space === 'community-1')" class="small" style="color: var(--warn); margin: 0">
+          You now use pyannote, and your voice was recorded for the built-in method only. Record it again.
+        </p>
       </div>
 
       <div class="panel stack">

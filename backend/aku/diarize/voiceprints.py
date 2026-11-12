@@ -85,3 +85,58 @@ def suggest(speakers: list[dict], space: str) -> dict[str, tuple[str, float]]:
             out[label] = (name, round(score, 2))
             used.add(name)
     return out
+
+
+# --- the owner's own voice (interview mode: who at the microphone is me) -----------------
+
+
+def add_me(embedding: list[float] | None, space: str, session: str | None = None, replace: bool = False) -> None:
+    """replace: a fresh enrolment starts over; otherwise the sample joins the recent ones."""
+    if embedding is None:
+        return
+    with db.connect() as con:
+        if replace:
+            con.execute("DELETE FROM my_voice WHERE space = ?", (space,))
+        con.execute("INSERT INTO my_voice (space, embedding, session) VALUES (?, ?, ?)", (space, _unit(embedding).tobytes(), session))
+        con.execute(
+            "DELETE FROM my_voice WHERE space = ? AND id NOT IN (SELECT id FROM my_voice WHERE space = ? ORDER BY id DESC LIMIT ?)",
+            (space, space, KEEP_PER_NAME),
+        )
+
+
+def me_vector(space: str) -> np.ndarray | None:
+    with db.connect() as con:
+        rows = con.execute("SELECT embedding FROM my_voice WHERE space = ?", (space,)).fetchall()
+    samples = [np.frombuffer(r["embedding"], dtype=np.float32) for r in rows]
+    samples = [s for s in samples if s.shape == samples[-1].shape] if samples else []
+    return _unit(np.mean(samples, axis=0)) if samples else None
+
+
+def me_info() -> list[dict]:
+    """Per speaker-separation method the owner's voice is enrolled for."""
+    with db.connect() as con:
+        rows = con.execute("SELECT space, COUNT(*) AS samples, MAX(created) AS updated FROM my_voice GROUP BY space ORDER BY space").fetchall()
+    return [dict(r) for r in rows]
+
+
+def forget_me() -> int:
+    with db.connect() as con:
+        return con.execute("DELETE FROM my_voice").rowcount
+
+
+def pick_me(speakers: list[dict], space: str) -> tuple[str, float] | None:
+    """The speaker that sounds most like the owner, if any is close enough: (label, score)."""
+    mine = me_vector(space)
+    if mine is None:
+        return None
+    best = None
+    for s in speakers:
+        if s.get("embedding") is None:
+            continue
+        v = _unit(s["embedding"])
+        if v.shape != mine.shape:
+            continue
+        score = float(v @ mine)
+        if best is None or score > best[1]:
+            best = (s["label"], score)
+    return (best[0], round(best[1], 2)) if best and best[1] >= MATCH else None

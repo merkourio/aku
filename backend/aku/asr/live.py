@@ -87,27 +87,31 @@ def segment_from(chunk: Chunk, words: list[Word], backend_name: str, prompt: str
 class LanguagePicker:
     """Which language to ask for, per chunk.
 
-    A fixed language is used as is. In automatic mode Whisper detects the language
-    of each chunk, but its detection is unreliable on a second or two of speech
-    ("ja", "okay"): short chunks reuse the language last detected on that track.
+    A fixed language is used as is: Whisper then writes everything in that language, so
+    with English chosen, speech in another language comes out translated into English.
+    With translate off, or in automatic mode, Whisper detects the language of each chunk
+    and writes it as spoken. Its detection is unreliable on a second or two of speech
+    ("ja", "okay"): short chunks reuse the language last detected on that track, or the
+    chosen language while nothing has been detected yet.
     """
 
     SHORT = 3.0  # seconds of speech below which detection is not trusted
 
-    def __init__(self, language: str = "en"):
+    def __init__(self, language: str = "en", translate: bool = True):
         self.language = language
+        self.detect = language == config.AUTO or not translate
         self._by_track: dict[str, str] = {}
         self._latest: str | None = None
 
     def choose(self, chunk: Chunk) -> str:
-        if self.language != config.AUTO:
+        if not self.detect:
             return self.language
         if chunk.speech_seconds < self.SHORT:
-            return self._by_track.get(chunk.track) or self._latest or config.AUTO
+            return self._by_track.get(chunk.track) or self._latest or self.language
         return config.AUTO
 
     def learn(self, chunk: Chunk, detected: str | None) -> None:
-        if self.language == config.AUTO and detected and chunk.speech_seconds >= self.SHORT:
+        if self.detect and detected and chunk.speech_seconds >= self.SHORT:
             self._by_track[chunk.track] = self._latest = detected
 
 
@@ -137,11 +141,12 @@ class Transcriber:
         language: str = "en",
         session_time: Callable[[], float] | None = None,
         on_error: Callable[[str], None] | None = None,
+        translate: bool = True,
     ):
         self.backend = backend
         self.on_segment = on_segment
         self.prompt = prompt
-        self.picker = LanguagePicker(language)
+        self.picker = LanguagePicker(language, translate)
         self.session_time = session_time
         self.on_error = on_error or (lambda msg: None)
         self._queue: queue.Queue[Chunk | None] = queue.Queue()

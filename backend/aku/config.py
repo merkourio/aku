@@ -75,6 +75,7 @@ DEFAULTS: dict[str, Any] = {
     "cloud_diarize_model": "gpt-4o-transcribe-diarize",  # Improve engine with its own speaker labels
     "use_gpu": True,
     "language": "en",
+    "translate": True,  # with a language chosen: write other languages in it too (off = keep them as spoken)
     "diarizer": "auto",  # auto | pyannote | basic
     "live_diarization": True,  # show speakers during the call (built-in method)
     "port": 4587,

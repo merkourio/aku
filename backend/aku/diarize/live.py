@@ -29,6 +29,7 @@ from ..asr.vad import SileroVAD
 from ..audio import wav
 from ..config import SAMPLE_RATE as SR
 from . import cluster
+from .voiceprints import MATCH
 
 
 class EmbedWorker:
@@ -39,6 +40,12 @@ class EmbedWorker:
         self._lock = threading.Lock()
 
     def start(self) -> None:
+        """Safe to call more than once (two live diarizers can share one worker)."""
+        with self._lock:
+            if self._proc is None:
+                self._start()
+
+    def _start(self) -> None:
         env = dict(os.environ)
         token = config.get_secret("hf_token")
         if token:
@@ -62,7 +69,7 @@ class EmbedWorker:
     def embed(self, wav_path: Path, windows: list[tuple[int, int]]) -> np.ndarray:
         with self._lock:
             if self._proc is None:
-                self.start()
+                self._start()
             self._proc.stdin.write(json.dumps({"wav": str(wav_path), "windows": windows}) + "\n")
             self._proc.stdin.flush()
             reply = self._read()
@@ -79,7 +86,9 @@ class EmbedWorker:
 class SpeakerTracker:
     """Clusters everything heard so far and keeps speaker numbers stable between updates."""
 
-    def __init__(self) -> None:
+    def __init__(self, prefix: str = "S", owner: np.ndarray | None = None) -> None:
+        self.prefix = prefix  # "S" for the other side, "M" for people at the microphone
+        self.owner = owner  # the owner's voice: the speaker that matches it is labelled "me"
         self.spans: list[tuple[int, int]] = []
         self.windows: list[cluster.Window] = []
         self.vectors = np.zeros((0, 0), dtype=np.float32)
@@ -112,9 +121,27 @@ class SpeakerTracker:
                 self.next_number += 1
         self.assigned = np.array([number[int(c)] if c >= 0 else -1 for c in labels], dtype=int)
         turns = cluster.turns_from(self.spans, self.windows, self.assigned)
+        me = self._owner_number()
         for t in turns:
-            t["speaker"] = f"S{t['speaker']}" if t["speaker"] > 0 else "S1"
+            n = t["speaker"] if t["speaker"] > 0 else 1
+            t["speaker"] = "me" if n == me else f"{self.prefix}{n}"
         return turns
+
+    def _owner_number(self) -> int | None:
+        """The speaker number whose voice matches the owner's, if one is close enough."""
+        if self.owner is None or self.vectors.size == 0 or self.vectors.shape[1] != self.owner.shape[0]:
+            return None
+        best, best_score = None, MATCH
+        usable = np.all(np.isfinite(self.vectors), axis=1)
+        for n in {int(s) for s in self.assigned if s >= 0}:
+            rows = self.vectors[(self.assigned == n) & usable]
+            if not len(rows):
+                continue
+            mean = (rows / np.maximum(np.linalg.norm(rows, axis=1, keepdims=True), 1e-9)).mean(axis=0)
+            score = float(mean / max(float(np.linalg.norm(mean)), 1e-9) @ self.owner)
+            if score > best_score:
+                best, best_score = n, score
+        return best
 
     @property
     def found(self) -> int:
@@ -130,6 +157,8 @@ class LiveDiarizer:
         on_error: Callable[[str], None],
         speakers: int | None = None,
         worker: EmbedWorker | None = None,
+        prefix: str = "S",
+        owner: np.ndarray | None = None,
     ):
         self.wav_path = Path(wav_path)
         self.flush = flush
@@ -137,7 +166,7 @@ class LiveDiarizer:
         self.on_error = on_error
         self.speakers = speakers
         self.worker = worker or EmbedWorker()
-        self.tracker = SpeakerTracker()
+        self.tracker = SpeakerTracker(prefix, owner)
         self._vad: SileroVAD | None = None
         self._done_until = 0  # samples already analysed
         self._queue: queue.Queue = queue.Queue()

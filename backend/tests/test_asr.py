@@ -211,3 +211,17 @@ def test_cloud_diarize_keeps_speakers_consistent_across_pieces(tmp_path):
     ]
     turns = cloud_diarize.exclusive_turns(segs + [dict(speaker="spk3", start=segs[3]["start"] + 1, end=segs[3]["end"] + 2, text="x")])
     assert all(a["end"] <= b["start"] for a, b in zip(turns, turns[1:]))
+
+
+def test_translate_off_keeps_other_languages_as_spoken():
+    from aku.asr.live import LanguagePicker
+
+    picker = LanguagePicker("en", translate=False)
+    assert picker.choose(chunk("system", 6.0)) == "auto"  # long enough: let Whisper hear which language it is
+    assert picker.choose(chunk("system", 1.0)) == "en"  # nothing detected yet: the chosen language
+    picker.learn(chunk("system", 6.0), "da")
+    assert picker.choose(chunk("system", 1.0)) == "da" and picker.choose(chunk("mic", 1.0)) == "da"
+    picker.learn(chunk("mic", 6.0), "en")
+    assert picker.choose(chunk("mic", 1.0)) == "en"
+    # on (the default) everything is asked for in the chosen language, which is what translates it
+    assert LanguagePicker("en").choose(chunk("system", 6.0)) == "en"
