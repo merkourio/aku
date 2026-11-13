@@ -38,7 +38,7 @@ def make_session(status="naming", audio=True) -> Session:
 def test_naming_then_finalise_writes_markdown_to_the_folder(tmp_path):
     m = Manager()
     s = make_session()
-    d = m.set_speaker(s.id, "S1", "  Alex Example ", remember=True)
+    d = m.set_speaker(s.id, "S1", "  Alex   Example ", remember=True)
     assert d["speakers"][0]["name"] == "Alex Example"
     assert [l["name"] for l in d["lines"]] == ["Alex Example", "Speaker 2", "Taylor", "Alex Example"]
     assert voiceprints.names() == []  # nothing is remembered before finalising

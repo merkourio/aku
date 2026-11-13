@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -265,6 +266,7 @@ After=graphical-session.target
 PartOf=graphical-session.target
 
 [Service]
+UMask=0077
 ExecStart={exe} serve
 Restart=on-failure
 RestartSec=3
@@ -340,6 +342,7 @@ def cmd_doctor(args) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    os.umask(0o077)  # recordings/voice data must not be world-readable
     ap = argparse.ArgumentParser(prog="aku", description="Aku: local call transcriber.")
     ap.add_argument("--version", action="version", version=__version__)
     sub = ap.add_subparsers(dest="command", required=True)

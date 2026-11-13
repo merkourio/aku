@@ -376,7 +376,9 @@ function toggleActive(name: string, on: boolean) {
         </div>
       </div>
 
-      <p class="muted small">Aku {{ form.version }}</p>
+      <p class="muted small">
+        Aku {{ form.version }} · <a :href="`https://github.com/merkourio/aku/tree/v${form.version}`" target="_blank" rel="noopener noreferrer">Source code (AGPL-3.0-or-later)</a>
+      </p>
     </template>
   </div>
 </template>

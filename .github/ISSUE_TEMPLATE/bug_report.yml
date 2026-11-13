@@ -1,0 +1,20 @@
+name: Bug report
+description: Report a problem using fictional, redacted data only.
+body:
+  - type: markdown
+    attributes:
+      value: "Do not upload recordings, transcripts, voiceprints, tokens or unredacted logs. Report security issues privately via Security → Report a vulnerability."
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Aku version, distribution, Python, desktop, local/cloud engine. No identifiers.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction and expected/actual result
+      description: Use fictional names and synthetic audio only.
+    validations:
+      required: true

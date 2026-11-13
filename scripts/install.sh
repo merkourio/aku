@@ -41,7 +41,7 @@ command -v uv >/dev/null || { echo "uv is missing. Install it: curl -LsSf https:
 command -v npm >/dev/null || { echo "npm is missing. Install it: sudo dnf install nodejs"; exit 1; }
 
 echo "== Building the browser UI"
-(cd frontend && npm install --no-fund --no-audit && npm run build)
+(cd frontend && npm ci --no-fund --no-audit && npm run build)
 
 if [ ! -x "${XDG_DATA_HOME:-$HOME/.local/share}/aku/deps/whisper.cpp/build/bin/whisper-server" ]; then
   echo "== Building whisper.cpp with Vulkan"
@@ -49,7 +49,8 @@ if [ ! -x "${XDG_DATA_HOME:-$HOME/.local/share}/aku/deps/whisper.cpp/build/bin/w
 fi
 
 echo "== Installing the aku command"
-uv tool install --force --python 3.12 ./backend
+python3 scripts/frontend-notices.py
+uv tool install --force --python 3.12 --torch-backend cpu ./backend
 
 echo "== Service, launcher entry"
 "$HOME/.local/bin/aku" setup

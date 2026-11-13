@@ -4,26 +4,43 @@ Aku (from Greek "άκου", listen) records a call on Linux as two tracks, your 
 
 Transcription runs on this computer by default (whisper.cpp on the GPU). OpenAI is an optional cloud engine.
 
+> **Hobby project, built with AI assistance.** Useful for my own workflow, but
+> not independently security-audited or guaranteed accurate. Issues and pull
+> requests are welcome; there is no promised response time or ongoing support.
+
+**Privacy:** obtain participants' permission before recording. Local processing
+is the default; optional cloud engines upload audio and may incur API charges.
+Voiceprints, recordings and exports can contain sensitive information. Read the
+[privacy notes](docs/privacy.md) and [security boundary](SECURITY.md).
+
 ## Install
 
-Aku runs on 64-bit Linux with PipeWire (made on Fedora). The repository is private, so installing uses your GitHub login through the `gh` command.
+Aku targets **Linux x86-64 with PipeWire** (developed on Fedora). The bundled
+Vulkan engine needs an AVX2-capable CPU, a Vulkan loader and working GPU drivers;
+other distributions/hardware are not yet a compatibility guarantee.
 
-Once per computer:
-
-```bash
-sudo dnf install gh pipewire-utils   # if not installed yet
-gh auth login
-```
-
-Then, to install or update to the latest release:
+Install PipeWire tools, `curl`, Python 3, and [uv](https://docs.astral.sh/uv/getting-started/installation/).
+No GitHub login is needed. Download and inspect the installer, then run it:
 
 ```bash
-gh release download -R merkourio/aku -p get-aku.sh -O - | bash
+curl -fL https://github.com/merkourio/aku/releases/latest/download/get-aku.sh -o get-aku.sh
+less get-aku.sh
+bash get-aku.sh
 ```
 
-No compiling and no sudo. It installs `uv` if needed, the `aku` command, a ready-made transcription engine (whisper.cpp with Vulkan), a background service that starts at every login, and an "Aku" entry in the app launcher. The first install downloads about 1 GB (Python and its libraries). Updating refuses while Aku is recording or finishing a transcript; add `-s -- --force` after `bash` to update anyway, or `-s -- --remove` to remove Aku (recordings and settings are kept).
+The installer verifies release SHA-256 checksums before installing the package
+and engine. It installs a Python 3.12 environment (about 1 GB on first install),
+the `aku` command, a launcher entry, and **enables a background service at login**.
+It does not require sudo. System prerequisites may need your distribution's
+package manager; Fedora: `sudo dnf install pipewire-utils curl python3`.
 
-If the ready-made engine does not run on a computer, the installer builds it there instead; that needs `git`, `cmake` and `gcc-c++`.
+Run it again to update. Use `--version v0.2.0` to select a specific release,
+`--remove` to uninstall while retaining recordings/settings, or `--force` to
+update despite an active recording/processing job (normally refused).
+
+If the binary cannot run, the installer attempts a source build of the pinned
+whisper.cpp revision. That needs git, CMake, C++ and Vulkan development tools.
+On Fedora: `sudo dnf install git cmake gcc-c++ vulkan-headers vulkan-loader-devel glslc`.
 
 Check everything is in place:
 
@@ -37,7 +54,8 @@ aku doctor
 
 ### Publishing a release
 
-From a clean, committed checkout: `bash scripts/release.sh 0.3.0 "What changed"`. It bumps the version, runs the tests, builds the UI into the package and a portable whisper-server, tags, pushes and creates the GitHub release that the install command fetches.
+See [docs/releasing.md](docs/releasing.md). `bash scripts/release.sh X.Y.Z`
+prepares local artifacts only; publishing requires a separate explicit step.
 
 ## Use
 
@@ -145,7 +163,7 @@ aku serve           run the service in this terminal (the installer runs it for 
 ```bash
 cd backend && uv sync                 # Python environment
 uv run aku serve --no-tray            # the service, in this terminal
-cd frontend && npm install && npm run dev   # UI with hot reload at http://localhost:5173
+cd frontend && npm ci && npm run dev   # UI with hot reload at http://localhost:5173
 ```
 
 For the dev UI, start the service with `AKU_DEV_ORIGIN=http://localhost:5173` so it accepts requests from the Vite server.
@@ -196,3 +214,15 @@ scripts/      installers (get-aku.sh: from a release; install.sh: from source), 
 - [pyannote.audio](https://github.com/pyannote/pyannote-audio) (MIT) and the WeSpeaker ResNet34 embedding model (CC BY 4.0) for telling speakers apart.
 - [Silero VAD](https://github.com/snakers4/silero-vad) (MIT) for finding speech.
 - Test recordings are built from [Mini LibriSpeech](https://www.openslr.org/31/) and [FLEURS](https://huggingface.co/datasets/google/fleurs) (both CC BY 4.0).
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Use synthetic, redacted examples in issues;
+never attach real calls, transcripts, voiceprints, tokens or unredacted logs.
+Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+
+## License
+
+AGPL-3.0-or-later; see [LICENSE](LICENSE), [NOTICE](NOTICE) and
+[third-party attribution](docs/licensing.md). Complete source is included with
+releases and available in this repository.

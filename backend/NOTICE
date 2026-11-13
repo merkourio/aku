@@ -1,0 +1,8 @@
+Aku
+Copyright (C) 2026 Markos Merkouris
+Licensed under AGPL-3.0-or-later; see LICENSE.
+
+Third-party components retain their own licenses. The frontend notice bundle is
+in backend/licenses/frontend.txt. Separately distributed whisper-server archives
+include upstream and bundled-component notices under licenses/.
+See docs/licensing.md for source, model and test-corpus attribution.

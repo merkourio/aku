@@ -1,0 +1,11 @@
+title = "Aku secret scanning"
+[extend]
+useDefault = true
+
+# RFC 6455 section 1.3's public example WebSocket handshake nonce. Not a credential.
+[[allowlists]]
+description = "RFC 6455 sample handshake nonce, only in the quit check"
+condition = "AND"
+paths = ['''^scripts/check_quit\.sh$''']
+regexTarget = "secret"
+regexes = ['''^dGhlIHNhbXBsZSBub25jZQ==$''']

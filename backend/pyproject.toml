@@ -2,6 +2,8 @@
 name = "aku-transcribe"
 version = "0.2.0"
 description = "Aku: local call transcriber for Linux (PipeWire, whisper.cpp, pyannote)"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE", "NOTICE", "licenses/*"]
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "fastapi>=0.115",
