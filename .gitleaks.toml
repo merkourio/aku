@@ -6,6 +6,6 @@ useDefault = true
 [[allowlists]]
 description = "RFC 6455 sample handshake nonce, only in the quit check"
 condition = "AND"
-paths = ['''^scripts/check_quit\.sh$''']
+paths = ['''(?:^|/)scripts/check_quit\.sh$''']
 regexTarget = "secret"
 regexes = ['''^dGhlIHNhbXBsZSBub25jZQ==$''']
