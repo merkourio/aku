@@ -41,7 +41,7 @@ python3 - "$DIST" <<'PYCODE'
 from pathlib import Path
 import hashlib, sys
 folder = Path(sys.argv[1])
-entries = sorted(p for p in folder.iterdir() if p.is_file() and p.name != 'SHA256SUMS')
+entries = sorted(p for p in folder.iterdir() if p.is_file() and not p.name.startswith('.') and p.name != 'SHA256SUMS')
 (folder / 'SHA256SUMS').write_text(''.join(f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n' for p in entries))
 PYCODE
 [ -z "$(git status --porcelain)" ] || { echo 'Build changed tracked files; review before publishing.'; exit 1; }
