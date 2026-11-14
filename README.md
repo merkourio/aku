@@ -226,3 +226,7 @@ Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 AGPL-3.0-or-later; see [LICENSE](LICENSE), [NOTICE](NOTICE) and
 [third-party attribution](docs/licensing.md). Complete source is included with
 releases and available in this repository.
+
+## Support
+
+If you find Aku useful, you can [buy me a coffee on Ko-fi](https://ko-fi.com/merkourio). Tips are optional and support my side projects.
